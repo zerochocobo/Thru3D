@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "file": "artifacts/fixtures/mp06_text_subtitles.mkv",
+  "sha256": "a7ab104057ec87ec586cedabf3ba582b4e7903b407499317c2563dac0aa0a1b7",
+  "bytes": 201529,
+  "streams": [
+    "subrip",
+    "subrip",
+    "ass"
+  ],
+  "cue_intervals_seconds": [
+    [
+      0.5,
+      1.5
+    ],
+    [
+      2,
+      3
+    ],
+    [
+      4,
+      5.5
+    ]
+  ],
+  "stream_indexes": [
+    3,
+    4,
+    5
+  ],
+  "stream_indexes_are_not_mpv_track_ids": true,
+  "rights": "Project-generated graphics, synthesized tones and original subtitle text",
+  "scope": "FFmpeg mux and FFprobe packet times verified; native MPV text decoding/track ids/Quest rendering pending",
+  "bundled_in_apk": false,
+  "repeated_mux_identical_bytes_verified": true
+}

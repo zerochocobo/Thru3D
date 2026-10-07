@@ -1,0 +1,37 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Hand tracking declarations come from the selected OpenXR vendor export
+         preset in both Debug and Release; this shared AAR is platform neutral. -->
+    <application>
+        <provider android:name="org.vrpassthroughplayer.plugin.LocalAccessTestProvider"
+            android:authorities="${applicationId}.accessfixture" android:exported="false" />
+        <activity android:name="org.vrpassthroughplayer.plugin.MpvDiagnosticActivity"
+            android:exported="false" android:screenOrientation="landscape"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|uiMode"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+        <receiver android:name="org.vrpassthroughplayer.plugin.DebugDiagnosticsReceiver"
+            android:exported="true" android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.wapok.thru3d.DEBUG_RVM_STANDALONE" />
+                <action android:name="com.wapok.thru3d.DEBUG_RVM" />
+                <action android:name="com.wapok.thru3d.DEBUG_DLNA" />
+                <action android:name="com.wapok.thru3d.DEBUG_CLOUD" />
+                <action android:name="com.wapok.thru3d.DEBUG_DEPTH_BENCH" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_CORE" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_GPU" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_SOURCE" />
+                <action android:name="com.wapok.thru3d.DEBUG_PLAYER_MPV" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_SHARED" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_AUDIO" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_MOTION" />
+                <action android:name="com.wapok.thru3d.DEBUG_CONTROLLED" />
+                <action android:name="com.wapok.thru3d.DEBUG_RVM_VIDEO" />
+                <action android:name="com.wapok.thru3d.DEBUG_CANCEL_CONTROLLED" />
+                <action android:name="com.wapok.thru3d.DEBUG_LAUNCH" />
+                <action android:name="com.wapok.thru3d.DEBUG_LAUNCH_2D" />
+                <action android:name="com.wapok.thru3d.DEBUG_LOCAL_ACCESS" />
+                <action android:name="com.wapok.thru3d.DEBUG_LOCAL_SELECTION" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_URI" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

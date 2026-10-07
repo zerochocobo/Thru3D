@@ -1,0 +1,432 @@
+--- a/video/out/vo_libmpv.c
++++ b/video/out/vo_libmpv.c
+@@ -26,6 +26,7 @@
+ #include "player/client.h"
+ 
+ #include "libmpv.h"
++#include "include/mpv/quest_frame.h"
+ 
+ #if HAVE_MACOS_COCOA_CB
+ #include "osdep/mac/app_bridge.h"
+@@ -86,6 +87,8 @@
+ 
+     // --- Protected by lock
+     struct vo_frame *next_frame;    // next frame to draw
++    uint64_t quest_source_epoch, quest_next_epoch, quest_current_epoch;
++    uint64_t quest_render_sequence;
+     int64_t present_count;          // incremented when next frame can be shown
+     int64_t expected_flip_count;    // next vsync event for next_frame
+     bool redrawing;                 // next_frame was a redraw request
+@@ -335,6 +338,11 @@
+ 
+ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+ {
++    quest_mpv_source_frame *quest_request = get_mpv_render_param(
++        params, MPV_RENDER_PARAM_QUEST_SOURCE_FRAME, NULL);
++    if (quest_request && (quest_request->struct_size != sizeof(*quest_request) ||
++        quest_request->api_version != QUEST_MPV_SOURCE_FRAME_API_VERSION))
++        return MPV_ERROR_INVALID_PARAMETER;
+     mp_mutex_lock(&ctx->lock);
+ 
+     int do_render =
+@@ -384,6 +392,7 @@
+     ctx->need_reset = false;
+ 
+     struct vo_frame *frame = ctx->next_frame;
++    uint64_t quest_epoch = frame ? ctx->quest_next_epoch : ctx->quest_current_epoch;
+     int64_t wait_present_count = ctx->present_count;
+     if (frame) {
+         ctx->next_frame = NULL;
+@@ -392,6 +401,7 @@
+         mp_cond_broadcast(&ctx->video_wait);
+         talloc_free(ctx->cur_frame);
+         ctx->cur_frame = vo_frame_ref(frame);
++        ctx->quest_current_epoch = quest_epoch;
+     } else {
+         frame = vo_frame_ref(ctx->cur_frame);
+         if (frame)
+@@ -402,6 +412,36 @@
+     if (!frame)
+         frame = &dummy;
+ 
++    quest_mpv_source_frame *quest = get_mpv_render_param(
++        params, MPV_RENDER_PARAM_QUEST_SOURCE_FRAME, NULL);
++    if (quest) {
++        memset(quest, 0, sizeof(*quest));
++        quest->struct_size = sizeof(*quest);
++        quest->api_version = QUEST_MPV_SOURCE_FRAME_API_VERSION;
++        quest->render_sequence = ++ctx->quest_render_sequence;
++        if (frame->current) {
++            const struct mp_image *image = frame->current;
++            quest->flags = QUEST_MPV_HAS_IMAGE |
++                (frame->redraw ? QUEST_MPV_REDRAW : 0) |
++                (frame->repeat ? QUEST_MPV_REPEAT : 0);
++            quest->frame_id = frame->frame_id;
++            quest->source_epoch = quest_epoch;
++            quest->width = image->w;
++            quest->height = image->h;
++            quest->crop_x0 = image->params.crop.x0;
++            quest->crop_y0 = image->params.crop.y0;
++            quest->crop_x1 = image->params.crop.x1;
++            quest->crop_y1 = image->params.crop.y1;
++            quest->rotation_degrees = image->params.rotate;
++            quest->mpv_image_format = image->imgfmt;
++            double us = image->pts * 1e6;
++            if (image->pts != MP_NOPTS_VALUE && isfinite(us) &&
++                us > (double)INT64_MIN && us < (double)INT64_MAX) {
++                quest->media_pts_us = llround(us);
++                quest->flags |= QUEST_MPV_PTS_VALID;
++            }
++        }
++    }
+     mp_mutex_unlock(&ctx->lock);
+ 
+     MP_STATS(ctx, "glcb-render");
+@@ -493,6 +533,11 @@
+     mp_mutex_lock(&ctx->lock);
+     mp_assert(!ctx->next_frame);
+     ctx->next_frame = vo_frame_ref(frame);
++    if (!ctx->quest_source_epoch) ctx->quest_source_epoch = 1;
++    // VO may queue an old redraw after RESET; preserve its image epoch.
++    bool retained = frame->current && ctx->cur_frame && ctx->cur_frame->current &&
++                    frame->frame_id == ctx->cur_frame->frame_id;
++    ctx->quest_next_epoch = retained ? ctx->quest_current_epoch : ctx->quest_source_epoch;
+     ctx->expected_flip_count = ctx->flip_count + 1;
+     ctx->redrawing = frame->redraw || !frame->current;
+     mp_mutex_unlock(&ctx->lock);
+@@ -545,6 +590,7 @@
+     if (ctx->next_frame) {
+         talloc_free(ctx->cur_frame);
+         ctx->cur_frame = ctx->next_frame;
++        ctx->quest_current_epoch = ctx->quest_next_epoch;
+         ctx->next_frame = NULL;
+         ctx->present_count += 2;
+         mp_cond_signal(&ctx->video_wait);
+@@ -606,6 +652,8 @@
+     case VOCTRL_RESET:
+         mp_mutex_lock(&ctx->lock);
+         forget_frames(ctx, false);
++        if (!ctx->quest_source_epoch) ctx->quest_source_epoch = 1;
++        ctx->quest_source_epoch++;
+         ctx->need_reset = true;
+         mp_mutex_unlock(&ctx->lock);
+         vo->want_redraw = true;
+@@ -755,3 +803,8 @@
+     .uninit = uninit,
+     .priv_size = sizeof(struct vo_priv),
+ };
++
++MPV_EXPORT uint32_t mpv_quest_source_frame_api_version(void)
++{
++    return QUEST_MPV_SOURCE_FRAME_API_VERSION;
++}
+--- a/video/out/gpu/libmpv_gpu.c
++++ b/video/out/gpu/libmpv_gpu.c
+@@ -4,6 +4,7 @@
+ #include "mpv/render_gl.h"
+ #include "video.h"
+ #include "video/out/libmpv.h"
++#include "include/mpv/quest_frame.h"
+ 
+ static const struct libmpv_gpu_context_fns *context_backends[] = {
+ #if HAVE_GL
+@@ -189,7 +190,21 @@
+     struct ra_fbo target = {.tex = tex, .flip = flip};
+     gl_video_render_frame(p->renderer, frame, &target, RENDER_FRAME_DEF);
+     p->context->fns->done_frame(p->context, frame->display_synced);
+-
++    quest_mpv_source_frame *quest = get_mpv_render_param(
++        params, MPV_RENDER_PARAM_QUEST_SOURCE_FRAME, NULL);
++    if (quest && frame->current) {
++        if (!gl_video_quest_source_valid(p->renderer, frame->frame_id))
++            return MPV_ERROR_GENERIC;
++        quest->flags |= QUEST_MPV_RENDER_VALID;
++        quest_mpv_export *export = get_mpv_render_param(
++            params, MPV_RENDER_PARAM_QUEST_EXPORT, NULL);
++        if (export && export->struct_size == sizeof(*export)) {
++            void *image = NULL, *buffer = NULL;
++            export->exported = gl_video_quest_export(p->renderer, frame->frame_id, &image, &buffer);
++            export->image = (uintptr_t)image;
++            export->hardware_buffer = (uintptr_t)buffer;
++        }
++    }
+     return 0;
+ }
+ 
+--- a/video/out/gpu/video.c
++++ b/video/out/gpu/video.c
+@@ -3670,6 +3670,24 @@
+     pass_report_performance(p);
+ }
+ 
++bool gl_video_quest_source_valid(struct gl_video *p, uint64_t frame_id)
++{
++    return !p->broken_frame && !p->is_interpolated && !p->hwdec_overlay &&
++        p->image.mpi && p->image.id == frame_id;
++}
++
++bool gl_video_quest_export(struct gl_video *p, uint64_t frame_id, void **image, void **buffer)
++{
++    struct ra_hwdec_mapper *m = p->hwdec_mapper;
++    if (!gl_video_quest_source_valid(p, frame_id) || !m || !p->image.hwdec_mapped ||
++        !m->quest_image || m->quest_detached)
++        return false;
++    m->quest_detached = true;
++    *image = m->quest_image;
++    *buffer = m->quest_buffer;
++    return true;
++}
++
+ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
+                          struct voctrl_screenshot *args)
+ {
+--- a/video/out/gpu/video.h
++++ b/video/out/gpu/video.h
+@@ -205,6 +205,8 @@
+ void gl_video_config(struct gl_video *p, struct mp_image_params *params);
+ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
+                            const struct ra_fbo *fbo, int flags);
++bool gl_video_quest_source_valid(struct gl_video *p, uint64_t frame_id);
++bool gl_video_quest_export(struct gl_video *p, uint64_t frame_id, void **image, void **buffer);
+ void gl_video_resize(struct gl_video *p,
+                      struct mp_rect *src, struct mp_rect *dst,
+                      struct mp_osd_res *osd);
+--- a/video/decode/vd_lavc.c
++++ b/video/decode/vd_lavc.c
+@@ -212,6 +212,7 @@
+     AVRational codec_timebase;
+     enum AVDiscard skip_frame;
+     bool flushing;
++    bool quest_mediacodec_drained;
+     struct lavc_state state;
+     const char *decoder;
+     bool hwdec_failed;
+@@ -901,7 +902,9 @@
+ {
+     vd_ffmpeg_ctx *ctx = vd->priv;
+ 
+-    if (ctx->avctx && avcodec_is_open(ctx->avctx))
++    // EOF cleanup/reset must not invalidate unmapped surface references.
++    // send_packet clears this guard before starting a new decode cycle.
++    if (ctx->avctx && avcodec_is_open(ctx->avctx) && !ctx->quest_mediacodec_drained)
+         avcodec_flush_buffers(ctx->avctx);
+     ctx->flushing = false;
+     ctx->hwdec_request_reinit = false;
+@@ -939,6 +942,7 @@
+     av_buffer_unref(&ctx->cached_hw_frames_ctx);
+ 
+     avcodec_free_context(&ctx->avctx);
++    ctx->quest_mediacodec_drained = false;
+ 
+     av_buffer_unref(&ctx->hwdec_dev);
+ 
+@@ -1232,6 +1236,12 @@
+         return AVERROR_EOF;
+ 
+     prepare_decoding(vd);
++    // Deferred EOS reset: only a new packet or an explicit seek may
++    // invalidate MediaCodec output still awaiting GPU presentation.
++    if (pkt && ctx->quest_mediacodec_drained) {
++        ctx->quest_mediacodec_drained = false;
++        reset_avctx(vd);
++    }
+ 
+     if (ctx->wait_for_keyframe > 0 && pkt) {
+         if (!pkt->keyframe && !ctx->intra_only) {
+@@ -1285,6 +1295,13 @@
+         return AVERROR_EOF;
+ 
+     prepare_decoding(vd);
++
++    // After a drained decoder/filter reset, request the next input before
++    // polling its stale EOF. lavc_process otherwise emits EOF without
++    // ever feeding the packet that performs our deferred flush. An
++    // upstream EOF with no packets is still propagated by lavc_process.
++    if (ctx->quest_mediacodec_drained && !ctx->state.packets_sent)
++        return AVERROR(EAGAIN);
+ 
+     // Re-send old packets (typically after a hwdec fallback during init).
+     if (ctx->num_requeue_packets)
+@@ -1297,8 +1314,16 @@
+             // start over in case we get new packets at some point in the future.
+             // This must take the delay queue into account, so avctx returns EOF
+             // until the delay queue has been drained.
+-            if (!ctx->num_delay_queue)
+-                reset_avctx(vd);
++            // MediaCodec flush invalidates surface outputs still in the VO.
++            // Preserve the final output until presentation or explicit reset.
++            if (!ctx->num_delay_queue) {
++                if (ctx->use_hwdec && avctx->pix_fmt == AV_PIX_FMT_MEDIACODEC) {
++                    MP_VERBOSE(vd, "Preserving MediaCodec output references at EOF.\n");
++                    ctx->quest_mediacodec_drained = true;
++                }
++                else
++                    reset_avctx(vd);
++            }
+         } else if (ret == AVERROR(EAGAIN)) {
+             // just retry after caller writes a packet
+         } else {
+--- a/video/out/hwdec/hwdec_aimagereader.c
++++ b/video/out/hwdec/hwdec_aimagereader.c
+@@ -157,7 +157,8 @@
+     // (incl. ones currently queued) at the same time.
+     // The documentation recommends a margin of 2 for acquireLatestImage to
+     // work correctly.
+-    const int max_images = 3;
++    // Quest: the libmpv caller may hold several exported images (display + RVM).
++    const int max_images = 10;
+     // dummy dimensions, AImageReader only transports hardware buffers
+     media_status_t ret = p->AImageReader_newWithUsage(16, 16,
+         AIMAGE_FORMAT_PRIVATE, AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
+@@ -324,9 +325,13 @@
+     }
+ 
+     if (p->image) {
+-        o->AImage_delete(p->image);
++        // An exported image belongs to the libmpv caller, which deletes it.
++        if (!mapper->quest_detached)
++            o->AImage_delete(p->image);
+         p->image = NULL;
+     }
++    mapper->quest_image = mapper->quest_buffer = NULL;
++    mapper->quest_detached = false;
+ }
+ 
+ static int mapper_map(struct ra_hwdec_mapper *mapper)
+@@ -348,10 +353,8 @@
+             char errstr[80];
+             av_strerror(err, errstr, sizeof(errstr));
+             MP_ERR(p, "Failed to render buffer: %s\n", errstr);
+-            // HACK: If the buffer has been released already, return fake
+-            // success to avoid flashing frames of render errors.
+-            // The VOs need to be fixed to handle this gracefully.
+-            return err == AVERROR(ENOENT) ? 0 : -1;
++            // Never report the previous external texture as this new source.
++            return -1;
+         }
+     }
+ 
+@@ -369,9 +372,8 @@
+     media_status_t ret = o->AImageReader_acquireLatestImage(o->reader, &p->image);
+     if (ret != AMEDIA_OK) {
+         MP_ERR(p, "acquireLatestImage failed: %d\n", ret);
+-        // (same hack as above)
+-        return (ret == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE && !image_available)
+-            ? 0 : -1;
++        // Missing images are render failures, never successful source maps.
++        return -1;
+     }
+     mp_assert(p->image);
+ 
+@@ -382,6 +384,9 @@
+         return -1;
+     }
+     mp_assert(hwbuf);
++    mapper->quest_image = p->image;
++    mapper->quest_buffer = hwbuf;
++    mapper->quest_detached = false;
+ 
+     // Update texture size since it may differ
+     AHardwareBuffer_Desc d;
+--- a/audio/out/buffer.c
++++ b/audio/out/buffer.c
+@@ -304,9 +304,13 @@
+         get_dev_state(ao, &state);
+         driver_delay = state.delay;
+     } else {
+-        int64_t end = p->end_time_ns;
+-        int64_t now = mp_time_ns();
+-        driver_delay = MPMAX(0, MP_TIME_NS_TO_S(end - now));
++        if (p->paused && p->hw_paused) {
++            driver_delay = MPMAX(0, MP_TIME_NS_TO_S(p->queued_time_ns));
++        } else {
++            int64_t end = p->end_time_ns;
++            int64_t now = mp_time_ns();
++            driver_delay = MPMAX(0, MP_TIME_NS_TO_S(end - now));
++        }
+     }
+ 
+     int64_t pending = mp_async_queue_get_samples(p->queue);
+--- a/video/out/gpu/hwdec.h
++++ b/video/out/gpu/hwdec.h
+@@ -71,6 +71,11 @@
+     // The common code won't mess with these, so you can e.g. set them in the
+     // .init() callback.
+     struct ra_tex *tex[4];
++
++    // Quest export: platform image (AImage*) and buffer of the mapped frame; once
++    // detached, unmap leaves the image to the libmpv caller.
++    void *quest_image, *quest_buffer;
++    bool quest_detached;
+ };
+ 
+ // This can be used to map frames of a specific hw format as GL textures.
+--- /dev/null
++++ b/include/mpv/quest_frame.h
+@@ -0,0 +1,66 @@
++/* Project-specific extension for the pinned mpv source build. */
++#ifndef QUEST_MPV_SOURCE_FRAME_H
++#define QUEST_MPV_SOURCE_FRAME_H
++#include <stdint.h>
++#include "client.h"
++#include "render.h"
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define QUEST_MPV_SOURCE_FRAME_API_VERSION 2u
++#define MPV_RENDER_PARAM_QUEST_SOURCE_FRAME ((mpv_render_param_type)0x51530001)
++enum quest_mpv_source_frame_flags {
++    QUEST_MPV_HAS_IMAGE = 1u << 0,
++    QUEST_MPV_PTS_VALID = 1u << 1,
++    QUEST_MPV_REDRAW = 1u << 2,
++    QUEST_MPV_REPEAT = 1u << 3,
++    QUEST_MPV_RENDER_VALID = 1u << 4
++};
++
++/* Output from the SAME render transaction that selects and draws the vo_frame.
++ * media_pts_us comes from current->pts, not vo_frame.pts or target display time.
++ * source_epoch changes on VOCTRL_RESET; retained old redraws keep their old epoch.
++ * RENDER_VALID requires a single successfully uploaded/cached GPU source image;
++ * it is not a fence completion, pixel oracle or permission to reuse an FBO.
++ * Caller sets struct_size and api_version before every call. 80 bytes on ARM64.
++ */
++typedef struct quest_mpv_source_frame {
++    uint32_t struct_size;
++    uint32_t api_version;
++    uint64_t flags;
++    uint64_t frame_id;
++    uint64_t source_epoch;
++    int64_t media_pts_us;
++    uint64_t render_sequence;
++    int32_t width, height;
++    int32_t crop_x0, crop_y0, crop_x1, crop_y1;
++    int32_t rotation_degrees;
++    int32_t mpv_image_format;
++} quest_mpv_source_frame;
++
++/* Optional, with the source frame param (API 2): hand the decoded MediaCodec image of THIS
++ * render to the caller instead of drawing it into an RGBA copy. On success image is an
++ * AImage* and hardware_buffer its AHardwareBuffer* (valid while the AImage lives); the caller
++ * owns the AImage and must AImage_delete() it once its GPU reads are complete. A frame is
++ * exported at most once: redraws of an exported frame report exported = 0.
++ * The AImageReader keeps up to 10 images, so callers may hold several at a time.
++ */
++#define MPV_RENDER_PARAM_QUEST_EXPORT ((mpv_render_param_type)0x51530002)
++typedef struct quest_mpv_export {
++    uint32_t struct_size;
++    uint32_t exported;
++    uint64_t image;
++    uint64_t hardware_buffer;
++} quest_mpv_export;
++
++/* Resolve this symbol before using the private param: stock mpv ignores unknown
++ * render params. A missing symbol/version mismatch must disable this backend.
++ */
++MPV_EXPORT uint32_t mpv_quest_source_frame_api_version(void);
++#ifdef __cplusplus
++}
++static_assert(sizeof(quest_mpv_source_frame) == 80, "Quest source frame ABI");
++static_assert(sizeof(quest_mpv_export) == 24, "Quest export ABI");
++#endif
++#endif

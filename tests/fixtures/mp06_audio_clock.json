@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "fixture": "mp06_audio_clock",
+  "file": "app/godot/media/mp06_audio_clock.mp4",
+  "sha256": "83f43671c23c383569451dbbb011868916a9a8e89af02b43d1627d6a648fcf30",
+  "bytes": 203139,
+  "video_source_manifest": "tests/fixtures/mp03_frame_identity.json",
+  "audio_tracks": [
+    {
+      "id": 1,
+      "language": "eng",
+      "frequency_hz": 440
+    },
+    {
+      "id": 2,
+      "language": "fra",
+      "frequency_hz": 880
+    }
+  ],
+  "audio_codec": "aac",
+  "audio_samplerate": 48000,
+  "audio_channels": 2,
+  "duration_seconds": 6,
+  "pulse_seconds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "pulse_duration_seconds": 0.1,
+  "rights": "Project-generated numbered graphics and synthesized tones; no external media",
+  "scope": "MPV output/clock/control calibration; audible output and Godot/XR AV sync require separate evidence"
+}

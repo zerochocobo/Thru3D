@@ -1,0 +1,95 @@
+{
+  "tag": "2026-09-17",
+  "source_url": "https://github.com/mpv-android/mpv-android/releases/download/2026-09-17/app-default-arm64-v8a-release.apk",
+  "apk_sha256": "0b0e0a534dd6b8d2b117f06952e0600064ad97702e48bff02543e3e32107803d",
+  "release_asset_digest": "sha256:0b0e0a534dd6b8d2b117f06952e0600064ad97702e48bff02543e3e32107803d",
+  "source_mpv_revision": "0b7ed670f7c353dd3dd4f8ae0fc788a181a15aa6",
+  "source_android_revision": "fdf74f6830c47dbaa8a22ac79726e8303f1db5af",
+  "license_build": "mpv default GPL; FFmpeg enable-gpl/version3. Development candidate, release decision pending",
+  "libraries": [
+    {
+      "name": "libavcodec.so",
+      "path": "lib/arm64-v8a/libavcodec.so",
+      "sha256": "403df40505a0d43ec6fb160e08ec21785f0da3ce5bb802b536ce790038598a57",
+      "bytes": 12392912
+    },
+    {
+      "name": "libavdevice.so",
+      "path": "lib/arm64-v8a/libavdevice.so",
+      "sha256": "4f4593ea81ae39ee71d71ed08d1e76c8c5961eb93f05fa21f7c625116da6b68b",
+      "bytes": 9216
+    },
+    {
+      "name": "libavfilter.so",
+      "path": "lib/arm64-v8a/libavfilter.so",
+      "sha256": "38aa94839ed4183b24165174d1de4ee2cda607973e25466e923170395b35b9b8",
+      "bytes": 4300432
+    },
+    {
+      "name": "libavformat.so",
+      "path": "lib/arm64-v8a/libavformat.so",
+      "sha256": "28812d328fcf7d1833c4df18bd46a67517ccb74d0dd8369f45d4b2aab2959d88",
+      "bytes": 3382440
+    },
+    {
+      "name": "libavutil.so",
+      "path": "lib/arm64-v8a/libavutil.so",
+      "sha256": "7089c47b942828b58d76ed88366eef87a8a4b0956821e4a4d6eb176198921771",
+      "bytes": 740360
+    },
+    {
+      "name": "libc++_shared.so",
+      "path": "lib/arm64-v8a/libc++_shared.so",
+      "sha256": "b5d97c38a728afe28d341cda3369f512d35eaf9c680c1b0563cd6a63e395230f",
+      "bytes": 1423696
+    },
+    {
+      "name": "libmpv.so",
+      "path": "lib/arm64-v8a/libmpv.so",
+      "sha256": "03d2d02db0451cebf4da2648188df7b2502005c6409fad1841b1d2b91ca8a814",
+      "bytes": 8256792
+    },
+    {
+      "name": "libplayer.so",
+      "path": "lib/arm64-v8a/libplayer.so",
+      "sha256": "5557256657de1ccfa3bea365dbe7f81b5c1026a8d54b8346807fdda5c170643d",
+      "bytes": 21512
+    },
+    {
+      "name": "libswresample.so",
+      "path": "lib/arm64-v8a/libswresample.so",
+      "sha256": "31c8d864c63d8f50632b654bffe8cb570100bfb98b2af6d0012faab2a1914759",
+      "bytes": 100688
+    },
+    {
+      "name": "libswscale.so",
+      "path": "lib/arm64-v8a/libswscale.so",
+      "sha256": "702b612f848bbc58a7f60071778e6a2ca32b73e5d51b4c7885529e9ca7f3704d",
+      "bytes": 1246600
+    }
+  ],
+  "headers": [
+    {
+      "file": "client.h",
+      "sha256": "1acf99ee77c8c2a6f1d1993bd81bbc8a91d27fb5924e80171670e6139a4bd353"
+    },
+    {
+      "file": "render.h",
+      "sha256": "192691941602052f00df0587f126246c48785a1cf21de68d22a92ea1908d1c55"
+    },
+    {
+      "file": "render_gl.h",
+      "sha256": "48662c0ed9872a14dd9e1684105c97f69f94a0414709c254c5d372adc41d2e69"
+    }
+  ],
+  "packaged_libraries": [
+    "libavcodec.so",
+    "libavdevice.so",
+    "libavfilter.so",
+    "libavformat.so",
+    "libavutil.so",
+    "libmpv.so",
+    "libswresample.so",
+    "libswscale.so"
+  ]
+}

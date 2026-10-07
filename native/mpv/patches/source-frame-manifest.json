@@ -1,0 +1,29 @@
+{
+  "base_mpv_revision": "0b7ed670f7c353dd3dd4f8ae0fc788a181a15aa6",
+  "base_archive_sha256": "d84b3c706592558bfba8e6305d00f86406c647c3b8b317236433e25caf4d9d91",
+  "base_files_sha256": {
+    "video/out/vo_libmpv.c": "02dd9ba5ac5c20830dd77fe67ce5f18ecea298aa1e36f5686f92ed52306905b4",
+    "video/out/gpu/libmpv_gpu.c": "084ad8d07055cb41c7d009cca07e7874fe9262203f2e28c42c5aaee461f045e6",
+    "video/out/gpu/video.c": "c3a2d28dadc406f8224002d01864119d27d0fe35454c62fe367beaa6f3a5355a",
+    "video/out/gpu/video.h": "8db57ba5d371ca5708531c0e2398d6e7f99e0655119253285273e92b0c74028a",
+    "video/decode/vd_lavc.c": "4c042a000d24dc093a8ccc60bfeeffa8e231fc7404fec3cf4f52c2e20bc3178a",
+    "video/out/hwdec/hwdec_aimagereader.c": "f18b67461d5a5f3bcdb06f2962b95afbf35aa31647f094c907f65253c538ed33",
+    "audio/out/buffer.c": "e053296cdfe58a07b6bd2aa5554774ff5c54ca57c622a56636fb6fe8f0fed105",
+    "video/out/gpu/hwdec.h": "d742ca26401c8c187473d086d3234663bede871c20d819999bf4bf6025657c74"
+  },
+  "patched_files_sha256": {
+    "video/out/vo_libmpv.c": "5b519bbf7efd3633c510132888ea610f46698d6e951487989030057e30d174c2",
+    "video/out/gpu/libmpv_gpu.c": "00b8a7d8e03faad8d565ddf618c9135cbadf7816396fe042b0ca901347d615d3",
+    "video/out/gpu/video.c": "b33425309f371e7fe4ffecc8b852172cae3d681957d7fcdcf4c61af74ac37890",
+    "video/out/gpu/video.h": "dda1d2b0a982e1ea68ce06803c86f82ea70130128a856573d1faac9c5aca89f7",
+    "video/decode/vd_lavc.c": "9f83992ea1ec5bfb8f42997ea37164df0a3a5e56a7f6ed26726fedce1245e682",
+    "video/out/hwdec/hwdec_aimagereader.c": "fbf5bdd1823fd7c9d3afa37976f66b494007470ebe24d3eb4fc19dd824255ae6",
+    "audio/out/buffer.c": "9d769290eb499906a43181997f2721ec1548b923db2e6851bdad7c48b0f32d67",
+    "video/out/gpu/hwdec.h": "40cbc32baae4f5e55654f89b8acad46b5d484f4b5ff0decd0596e25fd8dc6d8f",
+    "include/mpv/quest_frame.h": "6bd201be6ded204bec0fa5811cb441e8beb902a72b83f8f29ecbbc2ddb156455"
+  },
+  "patch_sha256": "779ca6960a252f4cf935e405dff5b958a7153815eb5f5eec2dda95dade6ed259",
+  "private_header_sha256": "6bd201be6ded204bec0fa5811cb441e8beb902a72b83f8f29ecbbc2ddb156455",
+  "api_version": 2,
+  "state": "source_patch_generated; build_and_device_validation_pending"
+}

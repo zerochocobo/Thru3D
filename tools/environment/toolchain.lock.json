@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "godot": {
+    "version": "4.7.2.stable.official.ed1daf0bf",
+    "renderer": "gl_compatibility",
+    "openxr_vendors": "5.1.0-stable"
+  },
+  "jdk": {
+    "version": "17.0.20.1+1"
+  },
+  "sdk": {
+    "command_line_tools": "22.0",
+    "platform_tools": "37.0.1",
+    "platform": "android-36",
+    "platform_revision": 2,
+    "build_tools": "36.1.0",
+    "ndk": "29.0.14206865",
+    "cmake": "3.31.6",
+    "ninja": "1.12.1"
+  },
+  "gradle": {
+    "wrapper": "8.11.1",
+    "android_gradle_plugin": "8.6.1",
+    "kotlin": "2.1.21"
+  },
+  "ncnn": {
+    "version": "20260526",
+    "vulkan": true
+  },
+  "python": {
+    "version": "3.13.5",
+    "onnx": "1.23.1",
+    "onnxruntime": "1.30.0",
+    "numpy": "2.5.3",
+    "ncnn": "1.0.20260526"
+  },
+  "pnnx": {
+    "version": "20260704",
+    "exe_sha256": "57140e8c34ef150e1b0e1c2238515c1228e2a800d5f146fb0dc962b4fc624aec"
+  },
+  "mpv_linux_build": {
+    "ndk": "30.0.16248370",
+    "meson": "1.11.0",
+    "ninja": "1.11.1",
+    "sources": "third_party/mpv/source-lock.json"
+  }
+}

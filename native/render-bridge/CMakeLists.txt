@@ -1,0 +1,5 @@
+add_library(quest_render_bridge SHARED render_bridge.cpp)
+target_compile_features(quest_render_bridge PRIVATE cxx_std_17)
+target_compile_options(quest_render_bridge PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(quest_render_bridge PRIVATE GLESv3 EGL android log nativewindow)
+target_link_options(quest_render_bridge PRIVATE "-Wl,-z,max-page-size=16384")

@@ -1,0 +1,74 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def ncnnRoot = providers.gradleProperty('ncnnDir').orElse(providers.environmentVariable('QUEST_NCNN_ROOT'))
+if (!ncnnRoot.isPresent()) { throw new GradleException('Pass -PncnnDir=<ncnn arm64 root> or activate the Quest environment.') }
+def mnnSource = providers.gradleProperty('mnnSource').orElse(providers.environmentVariable('QUEST_MNN_SOURCE'))
+def mnnLib = providers.gradleProperty('mnnLib').orElse(providers.environmentVariable('QUEST_MNN_LIB'))
+if (!mnnSource.isPresent() || !mnnLib.isPresent()) { throw new GradleException('Activate the Quest environment (QUEST_MNN_SOURCE/QUEST_MNN_LIB).') }
+
+// Keep the full numerical oracles on disk for device diagnostics, but never
+// include them in a normal player APK (including ordinary Debug builds).
+def includeDiagnostics = providers.gradleProperty('includeDiagnostics').map { it.toBoolean() }.getOrElse(false)
+def playerAssets = layout.buildDirectory.dir('playerAssets')
+def stagePlayerAssets = tasks.register('stagePlayerAssets', Sync) {
+    from('src/main/assets')
+    into(playerAssets)
+    if (!includeDiagnostics) {
+        exclude 'rvm/reference/**', 'rvm/**/*.bin', 'rvm/**/*.param', 'rvm-mnn/rvm_quality.mnn'
+    }
+}
+
+android {
+    namespace 'org.vrpassthroughplayer.plugin'
+    compileSdk 36
+    buildToolsVersion '36.1.0'
+    ndkVersion '29.0.14206865'
+    buildFeatures { buildConfig true }
+    sourceSets.main.assets.setSrcDirs([playerAssets])
+    sourceSets.main.assets.srcDir '../../third_party'
+    sourceSets.main.assets.srcDir '../../app/godot/i18n'
+    defaultConfig {
+        minSdk 29
+        buildConfigField 'boolean', 'INCLUDE_DIAGNOSTIC_MODELS', includeDiagnostics.toString()
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            cmake { arguments "-Dncnn_DIR=${ncnnRoot.get().replace('\\', '/')}/lib/cmake/ncnn", '-DANDROID_STL=c++_shared',
+                "-DQUEST_DIAGNOSTIC_MODELS=${includeDiagnostics ? 'ON' : 'OFF'}",
+                "-DMNN_SOURCE=${mnnSource.get().replace('\\', '/')}", "-DMNN_LIB=${mnnLib.get().replace('\\', '/')}" }
+        }
+    }
+    externalNativeBuild { cmake { path '../../native/rvm/CMakeLists.txt'; version '3.31.6' } }
+    // The Godot APK provides the matching NDK C++ shared runtime.
+    packagingOptions { jniLibs { excludes += ['**/libc++_shared.so'] } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+tasks.named('preBuild').configure { dependsOn stagePlayerAssets }
+
+def godotApi = providers.gradleProperty('godotAarPath')
+if (!godotApi.isPresent() || !file(godotApi.get()).isFile()) {
+    throw new GradleException('Pass -PgodotAarPath=<Godot 4.7.2 Android template AAR>. Run tools/Build-Player.ps1 to prepare it.')
+}
+dependencies {
+    // The exported Godot APK supplies this library. Never package a second engine.
+    compileOnly files(godotApi.get())
+    implementation 'androidx.media3:media3-exoplayer:1.10.1'
+    // SMB2/3 client with share enumeration (LGPL-2.1); the APK is already GPL through MPV.
+    implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
+    testImplementation 'junit:junit:4.13.2'
+    // JVM tests exercise org.json; android.jar only provides stubs.
+    testImplementation 'org.json:json:20240303'
+    // Debug Activity subclasses GodotActivity. The matching Godot export template
+    // supplies Fragment 1.8.6; compile only, never package another host framework.
+    debugCompileOnly 'androidx.fragment:fragment:1.8.6'
+}
+

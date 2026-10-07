@@ -1,0 +1,25 @@
+{
+  "asset": "Belfast Sunset (Pure Sky)",
+  "source": "https://polyhaven.com/a/belfast_sunset_puresky",
+  "license": "CC0-1.0",
+  "license_url": "https://polyhaven.com/license",
+  "verified_date": "2026-10-06",
+  "authors": {"photography": "Dimitrios Savva", "processing": "Greg Zaal", "sky_edits": "Jarod Guest"},
+  "bundled_source": {
+    "path": "app/godot/backgrounds/belfast_sunset_puresky.jpg",
+    "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/extra/Tonemapped%20JPG/belfast_sunset_puresky.jpg",
+    "dimensions": [8192, 4096],
+    "bytes": 16150434,
+    "md5": "5313193c1b09d9776dd3395d08b6beee",
+    "sha256": "a774a5144689e9cd721d6fb34638a29ef9814ff3b7048dcba23a2fee26aefdf4",
+    "changes": "Source file unchanged; Godot generates full-size ASTC/BPTC texture with mipmaps."
+  },
+  "archived_original": {
+    "path": "artifacts/background-source/belfast_sunset_puresky_24k.hdr",
+    "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/16k%2B/belfast_sunset_puresky_24k.hdr",
+    "dimensions": [24576, 12288],
+    "bytes": 435160646,
+    "md5": "e8fd47f400d5336b04bfa734503818b9",
+    "packaged": false
+  }
+}

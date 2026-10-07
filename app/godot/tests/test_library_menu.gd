@@ -1,0 +1,345 @@
+extends SceneTree
+
+const Menu := preload("res://scripts/library_menu.gd")
+var checks := 0
+var failures: Array[String] = []
+var chosen: Array = []
+var settings_events: Array = []
+
+class Catalog extends RefCounted:
+	func list_recent() -> Array[Dictionary]:
+		return [{"uri": "smb://srv1/Video/a.mp4", "title": "最近 A", "position_ms": 61000}]
+
+## Answers like the Android plugin: an id now, media_list(id, json) later.
+class FakePlatform extends Object:
+	signal media_list(id: int, payload: String)
+	signal android_lifecycle(state: String)
+	var cloud_setups := 0
+	var cloud_refreshed := false
+	func media_cloud_accounts() -> void:
+		cloud_setups += 1
+	func media_cloud_browse(path: String, refresh_cloud: bool) -> int:
+		cloud_refreshed = refresh_cloud
+		var entries := [{"id": "/mount1", "title": "115", "container": true}] if path.is_empty() else \
+			[{"id": path + "/片名.mp4", "title": "片名.mp4", "container": false, "uri": "cloud://mount1/%E7%89%87%E5%90%8D.mp4"}]
+		return _reply({"call": "cloud", "source": "cloud", "state": "ready", "path": path, "refresh": refresh_cloud, "entries": entries})
+	var next := 0
+	var calls: Array = []
+	var saved: Array = []
+	func _reply(payload: Dictionary) -> int:
+		next += 1
+		var id := next
+		calls.append(payload.get("call", ""))
+		(func(): media_list.emit(id, JSON.stringify(payload))).call_deferred()
+		return id
+	var all_files := false
+	var grants := 0
+	## The headset disk: volumes, then folders and videos read from it.
+	func media_local_browse(path: String) -> int:
+		var entries := []
+		if path.is_empty():
+			entries = [{"id": "/storage/emulated/0", "title": "Internal storage", "container": true, "volume": true, "removable": false},
+				{"id": "/storage/1234-5678", "title": "USB drive", "container": true, "volume": true, "removable": true}]
+		elif path == "/storage/emulated/0":
+			entries = [{"id": path + "/Movies", "title": "Movies", "container": true},
+				{"id": path + "/舞台.mp4", "title": "舞台.mp4", "container": false, "uri": "file:///storage/emulated/0/%E8%88%9E%E5%8F%B0.mp4", "size": 2147483648}]
+		elif path == "/storage/emulated/0/Movies":
+			entries = [{"id": path + "/b.mp4", "title": "b.mp4", "container": false, "uri": "file:///storage/emulated/0/Movies/b.mp4", "size": 1048576}]
+		return _reply({"call": "local", "source": "local", "state": "ready", "path": path, "all_files": all_files, "entries": entries})
+	func media_local_grant_all_files() -> void:
+		grants += 1
+	func media_smb_servers() -> int:
+		return _reply({"call": "smb_servers", "source": "smb", "state": "ready",
+			"servers": [{"id": "srv1", "name": "NAS", "host": "192.168.1.9", "user": "me", "has_password": true}]})
+	func media_smb_discover() -> int:
+		return _reply({"call": "smb_discover", "source": "smb", "state": "ready", "discovered": [{"name": "Other", "host": "192.168.1.20"}]})
+	func media_smb_browse(server: String, path: String) -> int:
+		var entries := [{"id": "Video", "title": "Video", "container": true}] if path.is_empty() else \
+			[{"id": path + "/8k.mp4", "title": "8k.mp4", "container": false, "uri": "smb://%s/%s/8k.mp4" % [server, path], "size": 7}]
+		return _reply({"call": "smb_browse", "source": "smb", "state": "ready", "server_id": server, "path": path, "entries": entries})
+	func media_smb_save(json: String) -> int:
+		saved.append(JSON.parse_string(json))
+		return media_smb_servers()
+	func media_smb_remove(_id: String) -> int:
+		return _reply({"call": "smb_remove", "source": "smb", "state": "ready", "servers": []})
+	func media_dlna_discover() -> int:
+		return _reply({"call": "dlna_discover", "source": "dlna", "state": "ready",
+			"servers": [{"id": "uuid:1", "name": "媒体服务器", "location": "http://x", "control_url": "http://x/c"}]})
+	func media_dlna_browse(server: String, object_id: String) -> int:
+		var entries := [{"id": "c1", "title": "VR", "container": true}] if object_id == "0" else \
+			[{"id": "i1", "title": "Show", "container": false, "uri": "http://192.168.1.5/1.mp4"}]
+		return _reply({"call": "dlna_browse", "source": "dlna", "state": "ready", "server_id": server, "entries": entries})
+
+func check(value: bool, message: String) -> void:
+	checks += 1
+	if not value:
+		failures.append(message)
+
+func _initialize() -> void:
+	call_deferred("_run")
+
+func settle() -> void:
+	await process_frame
+	await process_frame
+
+func titles(menu: Node) -> Array:
+	return menu.rows.map(func(r): return str(r.title))
+
+func _run() -> void:
+	preload("res://scripts/i18n.gd").use("en") # text checks are written in English
+	var platform := FakePlatform.new()
+	var menu := Menu.new()
+	menu.catalog = Catalog.new()
+	menu.settings_provider = func(): return {"profile": "320x320", "profiles": ["320x320", "512x512"], "output_width": 0, "rvm_model": "fast", "version": "t"}
+	menu.chosen.connect(func(uri: String, title: String): chosen.append([uri, title]))
+	menu.setting_changed.connect(func(key: String, value: Variant): settings_events.append([key, value]))
+	root.add_child(menu)
+	menu.attach_platform(platform)
+	menu.toggle()
+	check(menu.section == Menu.Section.RECENT and titles(menu) == ["最近 A"], "Opens on the play history")
+	# Clearing history takes a second press on the same button.
+	menu._activate(Menu.CLEAR_HISTORY)
+	check(settings_events.is_empty() and menu._confirm == "clear_history", "First press only arms clearing")
+	menu._activate(Menu.CLEAR_HISTORY)
+	check(settings_events.back() == ["clear_history", true], "Second press clears the history")
+	# Local: the disk itself, volumes then folders and videos.
+	menu._activate(Menu.NAV_BASE + Menu.Section.LOCAL)
+	await settle()
+	check(titles(menu) == ["Internal storage", "USB drive"] and menu.rows[1].icon == "usb", "Storage volumes: %s" % [titles(menu)])
+	check(menu.text_snapshot().is_empty() == false and menu._buttons.any(func(b): return b.target == Menu.ALL_FILES),
+		"Without all-files access a button offers it")
+	menu._activate(Menu.ALL_FILES)
+	check(platform.grants == 1, "The button opens the system access page")
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	check(titles(menu) == ["Movies", "舞台.mp4"] and menu.rows[1].detail == "2.0 GB" and menu._header_title() == "Internal storage",
+		"Volume lists folders first, then videos with size")
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	check(titles(menu) == ["b.mp4"] and menu._header_title() == "Internal storage / Movies", "Folder opens")
+	menu._activate(Menu.ROW_BASE)
+	check(chosen.back() == ["file:///storage/emulated/0/Movies/b.mp4", "b.mp4"] and not menu.visible, "Choosing a video emits its file URI and closes")
+	menu.toggle()
+	menu._activate(Menu.NAV_BASE + Menu.Section.LOCAL)
+	await settle()
+	check(titles(menu) == ["b.mp4"], "Reopening keeps the folder")
+	menu._activate(Menu.BACK)
+	await settle()
+	check(titles(menu) == ["Movies", "舞台.mp4"], "Back returns to the parent folder")
+	# SMB: saved servers plus discovered hosts, shares, folders, file URI.
+	menu._activate(Menu.NAV_BASE + Menu.Section.CLOUD)
+	await settle()
+	check(titles(menu) == ["115"], "Cloud accounts appear as mounts")
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	check(titles(menu) == ["片名.mp4"] and menu._header_title() == "115", "Cloud folder opens with a readable breadcrumb")
+	menu._activate(Menu.REFRESH)
+	await settle()
+	check(platform.cloud_refreshed, "Cloud refresh bypasses cached metadata")
+	menu._activate(Menu.ROW_BASE)
+	check(str(chosen.back()[0]).begins_with("cloud://mount1/") and not menu.visible, "Cloud selection keeps a stable URI")
+	menu.toggle()
+	menu._activate(Menu.NAV_BASE + Menu.Section.CLOUD)
+	await settle()
+	menu._activate(Menu.CRUMB_BASE)
+	await settle()
+	check(titles(menu) == ["115"], "Cloud breadcrumb returns to account list")
+	menu._activate(Menu.CLOUD_ACCOUNTS)
+	check(platform.cloud_setups == 1, "Account action opens the native login page")
+	platform.android_lifecycle.emit("resume")
+	await settle()
+	check(not menu._cloud_setup and titles(menu) == ["115"], "Returning from login reloads mounts")
+	menu._activate(Menu.NAV_BASE + Menu.Section.SMB)
+	await settle()
+	check(titles(menu) == ["NAS"], "Saved SMB server listed")
+	menu._activate(Menu.REFRESH)
+	await settle()
+	check(titles(menu) == ["NAS", "Other"] and menu.rows[1].icon == "plus", "Discovered host offered to add")
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	check(titles(menu) == ["Video"] and menu._header_title() == "NAS", "Server lists shares")
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	check(menu._header_title() == "NAS / Video" and titles(menu) == ["8k.mp4"], "Share lists videos")
+	menu._activate(Menu.ROW_BASE)
+	check(chosen.back()[0] == "smb://srv1/Video/8k.mp4", "SMB video emits a stable smb:// URI")
+	menu.toggle()
+	menu._activate(Menu.BACK)
+	await settle()
+	check(menu._smb_path == "" and titles(menu) == ["Video"], "Back from a share returns to the share list")
+	# Editor: typing with the ray keyboard, shift, backspace, save.
+	menu._activate(Menu.BACK)
+	await settle()
+	menu._activate(Menu.ADD)
+	check(not menu._editor.is_empty() and menu._field == 1, "Add opens the editor on the host field")
+	for key in [Menu.KEY_BASE + 0, Menu.KEY_BASE + 9, Menu.KEY_BASE + 28]: # "1", "0", "."
+		menu._activate(key)
+	menu._activate(Menu.BACKSPACE)
+	check(menu._editor.host == "10", "Keyboard types and deletes: %s" % menu._editor.host)
+	menu._activate(Menu.FIELD_BASE + 2)
+	menu._activate(Menu.SHIFT)
+	menu._activate(Menu.KEY_BASE + 10) # "q" -> "Q"
+	menu._activate(Menu.KEY_BASE + 11)
+	check(menu._editor.user == "Qw", "Shift applies to one key")
+	menu._activate(Menu.FIELD_BASE + 3)
+	menu._activate(Menu.KEY_BASE + 20)
+	check(menu.text_snapshot().contains("•") and not menu.text_snapshot().contains("Qwa"), "Password is masked")
+	menu._activate(Menu.SAVE)
+	await settle()
+	check(platform.saved.size() == 1 and platform.saved[0].host == "10" and platform.saved[0].password == "a", "Save sends the server")
+	check(menu._editor.is_empty() and titles(menu) == ["NAS", "Other"], "Editor closes; saved and still-unsaved discovered hosts listed")
+	# DLNA: discovery on entry, containers, items.
+	menu._activate(Menu.NAV_BASE + Menu.Section.DLNA)
+	await settle()
+	check(titles(menu) == ["媒体服务器"], "DLNA servers discovered on entry")
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	menu._activate(Menu.ROW_BASE)
+	await settle()
+	check(menu._header_title() == "媒体服务器 / VR" and titles(menu) == ["Show"], "DLNA container lists items")
+	menu._activate(Menu.ROW_BASE)
+	check(chosen.back()[0] == "http://192.168.1.5/1.mp4", "DLNA item emits its media URL")
+	menu.toggle()
+	menu._activate(Menu.BACK)
+	await settle()
+	check(titles(menu) == ["VR"], "DLNA back to the root container")
+	# Settings sub-tabs.
+	menu._activate(Menu.NAV_BASE + Menu.Section.SETTINGS)
+	check(not Menu.SETTING_TABS.has("Alpha") and not menu.text_snapshot().contains("320x320")
+		and not menu.text_snapshot().contains("RVM quality"), "Settings omit model and input-resolution decisions")
+	menu._activate(Menu.TAB_BASE + Menu.VIDEO_TAB)
+	menu._activate(Menu.ROW_BASE + 2)
+	check(settings_events.back() == ["output_width", 4096], "Output cap setting")
+	check(titles(menu).back() == "Save play history" and menu.rows.back().selected, "History is saved by default")
+	menu._activate(Menu.ROW_BASE + menu.rows.size() - 1)
+	check(settings_events.back() == ["history", false], "History can be switched off")
+	menu._activate(Menu.TAB_BASE + Menu.SUBTITLES_TAB)
+	check(titles(menu).size() == Menu.SUBTITLE_DISTANCES.size() and menu.rows[0].selected, "Subtitle distances, 5 m by default")
+	menu._activate(Menu.ROW_BASE + 3)
+	check(settings_events.back() == ["subtitle_distance", 15.0], "Choosing a subtitle distance emits a setting")
+	menu._activate(Menu.TAB_BASE + Menu.ABOUT_TAB)
+	var about_text := "\n".join(menu.find_children("*", "Label3D", true, false).map(func(label): return label.text))
+	check(about_text.contains("Thru3D Media Player") and about_text.contains("FFSky Studio")
+		and about_text.contains("ffskyteam@gmail.com") and about_text.contains("https://wapok.com"), "About brand and support")
+	menu._activate(Menu.ROW_BASE + 5)
+	check(menu.rows[0].title == "Belfast Sunset (Pure Sky)" and menu.rows[0].detail.contains("Poly Haven · CC0 1.0")
+		and menu.rows[0].detail.contains("Dimitrios Savva / Greg Zaal / Jarod Guest") and menu.rows[1].title == "Godot",
+		"One panorama entry contains its source, license and all authors")
+	var credit_detail: Label3D = menu._buttons.filter(func(button): return button.target == Menu.ROW_BASE)[0].node.get_child(2)
+	check(credit_detail.text == menu.rows[0].detail, "Combined panorama attribution remains visible without truncation")
+	var credit_origin := menu.to_global(Vector3(0.1, Menu.LIST_TOP, 1))
+	check(menu.ray_hit(credit_origin, -menu.global_basis.z).is_empty(), "Copyright information is not a fake clickable control")
+	menu.press_pointer("right_hand", credit_origin, -menu.global_basis.z, true)
+	menu.update_pointer("right_hand", menu.to_global(Vector3(0.1, Menu.LIST_TOP + 0.4, 1)), -menu.global_basis.z, true)
+	menu.release_pointer("right_hand", Vector3.ZERO, Vector3.ZERO, true)
+	check(menu.scroll > 0, "Ray dragging still scrolls informational credits")
+	menu.scroll = menu._max_scroll()
+	menu._draw()
+	check(menu.text_snapshot().contains("p115rsacipher") and menu._max_scroll() > 0, "Copyright list scrolls to its final component")
+	menu._activate(Menu.ABOUT_HOME)
+	check(menu.rows[0].title == "Thru3D Media Player" and menu.scroll == 0, "Return from credits resets scrolling")
+	# Long lists scroll with the stick (whole rows) and the scrollbar track; no pages.
+	menu._activate(Menu.NAV_BASE + Menu.Section.LOCAL)
+	await settle()
+	var many: Array = []
+	for i in 30:
+		many.append({"id": "/big/%d" % i, "uri": "file:///big/v%02d.mp4" % i, "title": "v%02d" % i, "size": 1, "container": false})
+	menu.platform = null # keep this listing; a reload would replace it
+	menu._local_stack = [{"id": "/big", "title": "Big"}]
+	menu._local_entries = many
+	menu.scroll = 0.0
+	menu.refresh()
+	check(menu.rows.size() == 30 and int(menu.scroll) == 0, "Folder with 30 videos starts at the top")
+	var direction := -menu.global_basis.z
+	# Videos are tiles, four per line; [scroll] counts lines.
+	var at := func(y: float) -> Vector3: return menu.to_global(Vector3(-0.36, y, 1.0))
+	var first_line := Menu.GRID_TOP - Menu.TILE_SIZE.y * 0.5
+	# Ray press on a tile, drag up five line pitches, release: scrolls, does not select.
+	var picks := chosen.size()
+	check(menu.press_pointer("right_hand", at.call(first_line), direction, true), "Press on a tile is accepted")
+	check(chosen.size() == picks, "Press alone does not select")
+	menu.update_pointer("right_hand", at.call(first_line + 5 * Menu.GRID_PITCH.y), direction, true)
+	menu.release_pointer("right_hand", at.call(first_line + 5 * Menu.GRID_PITCH.y), direction, true)
+	check(roundi(menu.scroll) == 5 and chosen.size() == picks, "Ray drag scrolls five lines without selecting: %s" % menu.scroll)
+	# A tap (press + release without moving) selects the row under the ray.
+	menu.press_pointer("right_hand", at.call(first_line), direction, true)
+	menu.release_pointer("right_hand", at.call(first_line + 0.005), direction, true)
+	check(chosen.back()[1] == "v20", "Tap selects the visible tile at the scroll position")
+	menu.toggle()
+	check(menu.visible and menu._local_path() == "/big" and menu.rows.size() == 30, "Reopening keeps the folder")
+	menu.press_pointer("right_hand", at.call(first_line), direction, true)
+	menu.update_pointer("right_hand", at.call(first_line - 9.0), direction, true)
+	menu.release_pointer("right_hand", at.call(first_line - 9.0), direction, true)
+	check(menu.scroll == 0.0, "Dragging down past the top clamps")
+	var bar_bottom := Menu.GRID_TOP - (Menu.GRID_LINES * Menu.GRID_PITCH.y - 0.012) + 0.01
+	menu.press_pointer("left_hand", menu.to_global(Vector3(0.835, bar_bottom, 1.0)), direction, true)
+	menu.release_pointer("left_hand", menu.to_global(Vector3(0.835, bar_bottom, 1.0)), direction, true)
+	check(menu.scroll == menu._max_scroll(), "Pointing at the scrollbar bottom jumps to the end")
+	# A press in the gap between tiles also drags; mid-way the rows shift smoothly instead of jumping.
+	menu.scroll = 0.0
+	menu.refresh()
+	var gap := Menu.GRID_TOP - Menu.TILE_SIZE.y - 0.01
+	var gap_at := func(y: float) -> Vector3: return menu.to_global(Vector3(-0.36, y, 1.0))
+	check(menu.press_pointer("right_hand", gap_at.call(gap), direction, true), "Press between tiles starts a drag")
+	menu.update_pointer("right_hand", gap_at.call(gap + 1.5 * Menu.GRID_PITCH.y), direction, true)
+	check(is_equal_approx(menu.scroll, 1.5) and is_equal_approx(menu._list.position.y, 0.5 * Menu.GRID_PITCH.y),
+		"Drag scrolls by fractions of a line: %s" % menu.scroll)
+	var hidden := menu._buttons.filter(func(b): return menu._row_target(b.target) and not b.node.visible).size()
+	check(hidden == Menu.COLS * 2, "Half-way between lines both edge lines hide: %d" % hidden)
+	menu.release_pointer("right_hand", gap_at.call(gap + 1.5 * Menu.GRID_PITCH.y), direction, true)
+	check(chosen.size() == picks + 1, "Releasing a drag from a gap selects nothing")
+	for _frame in 60:
+		menu._process(1.0 / 60.0)
+	check(menu.scroll == roundf(menu.scroll), "At rest the list settles on a whole line: %s" % menu.scroll)
+	# Thumbsticks scroll (down shows later rows) and never select.
+	menu.scroll = 0.0
+	menu.refresh()
+	menu.stick_scroll(-1.0, 0.25)
+	check(menu.scroll > 0.5 and chosen.size() == picks + 1, "Stick down scrolls towards later rows: %s" % menu.scroll)
+	var held := menu.scroll
+	menu.stick_scroll(0.1, 0.25)
+	check(menu.scroll == held, "Inside the dead zone the stick does nothing")
+	menu.stick_scroll(1.0, 5.0)
+	check(menu.scroll == 0.0, "Stick up scrolls back and clamps at the top")
+	# The navigation column is angled towards the viewer: a ray aimed at an entry from the front hits it.
+	var smb_entry: Vector3 = menu._side.to_global(Vector3(0, 0.39 - Menu.Section.SMB * 0.13, 0.002))
+	var eye := smb_entry + menu._side.global_basis.z * 1.2
+	check(menu.press_pointer("left_hand", eye, smb_entry - eye, true) and menu.section == Menu.Section.SMB, "Ray selects an entry on the angled navigation column")
+	menu.attach_platform(platform)
+	menu._activate(Menu.NAV_BASE + Menu.Section.LOCAL)
+	check(not menu.text_snapshot().contains(" / "), "No page counter")
+	# Denied media permission offers a retry.
+	menu._on_media_list(-1, "{}")
+	menu._pending[999] = "local"
+	menu._on_media_list(999, JSON.stringify({"state": "denied"}))
+	check(menu.status == "Media access needed", "Denied permission shows a short status")
+	menu._pending[998] = "local"
+	menu._on_media_list(998, JSON.stringify({"state": "denied", "error": "ALL_FILES_ACCESS_NEEDED"}))
+	menu._activate(Menu.GRANT)
+	check(menu.status == "All files access needed" and platform.grants == 2, "An unreadable folder asks for all-files access")
+	menu._pending[997] = "local"
+	menu._on_media_list(997, JSON.stringify({"state": "denied"}))
+	# Language: follows the choice, the same menu in Chinese and back in English.
+	var I18n := preload("res://scripts/i18n.gd")
+	I18n.use("zh")
+	menu.refresh()
+	check(menu.text_snapshot().contains("本地文件") and menu.text_snapshot().contains("需要媒体访问权限") 		and not menu.text_snapshot().contains("Local files"), "Chinese menu and status")
+	menu._activate(Menu.NAV_BASE + Menu.Section.SETTINGS)
+	menu._activate(Menu.TAB_BASE + Menu.ABOUT_TAB)
+	menu._activate(Menu.ROW_BASE + 4)
+	check(menu.rows.size() == 5 and menu.rows[1].title == "简体中文" and menu.rows[2].title == "繁體中文"
+		and menu.rows[3].title == "日本語" and menu.rows[4].title == "English"
+		and menu.rows[0].title == "跟随系统", "About lists all languages, each named in itself")
+	var chosen := []
+	menu.setting_changed.connect(func(key, value): chosen.append([key, value]))
+	menu._activate(Menu.ROW_BASE + 4)
+	check(chosen == [["language", "en"]], "Choosing a language reports it")
+	I18n.use("en")
+	menu.refresh()
+	check(menu.text_snapshot().contains("About") and not menu.text_snapshot().contains("关于"), "English menu")
+	print("library menu checks=%d failures=%d" % [checks, failures.size()])
+	for failure in failures:
+		push_error(failure)
+	menu.queue_free()
+	platform.free()
+	quit(0 if failures.is_empty() else 1)

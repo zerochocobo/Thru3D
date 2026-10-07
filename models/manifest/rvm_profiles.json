@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "precision": "fp32",
+  "downsample_ratio": 1.0,
+  "profiles": [
+    {
+      "key": "256x144",
+      "width": 256,
+      "height": 144
+    },
+    {
+      "key": "384x216",
+      "width": 384,
+      "height": 216
+    },
+    {
+      "key": "512x288",
+      "width": 512,
+      "height": 288
+    },
+    {
+      "key": "256x256",
+      "width": 256,
+      "height": 256
+    },
+    {
+      "key": "384x384",
+      "width": 384,
+      "height": 384
+    },
+    {
+      "key": "512x512",
+      "width": 512,
+      "height": 512
+    },
+    {
+      "key": "320x320",
+      "width": 320,
+      "height": 320
+    }
+  ],
+  "aspect_policy": "Choose a matching aspect or letterbox; never squeeze square VR180 into 16:9"
+}

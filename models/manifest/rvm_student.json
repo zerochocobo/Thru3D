@@ -1,0 +1,12 @@
+{
+  "file": "models/source/rvm_d1_distilled_u8.onnx",
+  "sha256": "09f70651951ee9551960e5e05d80ba560e5d0aa41b09c8b4dcd0706cbf7a356c",
+  "base": "build/rvm/mnn/rvm.fused.u8.onnx (fused upstream RVM MobileNetV3, ratio=1, u8 io)",
+  "variant": "d1: decode1 32->16 channels (state r1 16->8) and output block 16->8",
+  "license": "GPL-3.0 (derived from RVM weights)",
+  "training": {
+    "tool": "tools/models/distill_rvm_decoder.py",
+    "data": "User-supplied licensed video sequences; original training media is not distributed.",
+    "reproduction": "The released student weights are required to reproduce the original application model."
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "source": "Project-generated static RGB, known mask and 660 Hz tone",
+  "rights": "Project-owned synthetic calibration media",
+  "generator": "tools/media/generate_c04_fixtures.py",
+  "ffmpeg": "ffmpeg version 2025-11-10-git-133a0bcb13-full_build-www.gyan.dev Copyright (c) 2000-2025 the FFmpeg developers",
+  "width": 1280,
+  "height": 640,
+  "fps": 30,
+  "frames": 180,
+  "duration_seconds": 6,
+  "packed_dimensions": [
+    512,
+    256
+  ],
+  "pack_scale": 0.4,
+  "radius_scale": 1.0,
+  "lens_fov": 180,
+  "rgb_per_eye": [
+    [
+      224,
+      48,
+      32
+    ],
+    [
+      32,
+      80,
+      224
+    ]
+  ],
+  "alpha_values_left": [
+    0,
+    64,
+    128,
+    192,
+    255
+  ],
+  "alpha_values_right": [
+    255,
+    192,
+    128,
+    64,
+    0
+  ],
+  "top_alpha_scale": 0.5,
+  "bottom_alpha_scale": 1.0,
+  "codec": "H264 high yuv420p BT709 SDR; AAC mono 48k",
+  "assets": [
+    {
+      "file": "app/godot/media/c04_alpha_f180.mp4",
+      "bytes": 114483,
+      "sha256": "e7e3ccdb0bc16afc02fdddd997d3d13cfa86faac6bf888cfd49624cdc41fe85b",
+      "geometry": "F180 SBS",
+      "alpha": "six-block red"
+    },
+    {
+      "file": "app/godot/media/c04_independent_alpha.mp4",
+      "bytes": 95300,
+      "sha256": "858a88404322da495f3fdcb88467ddb2e8b0e244c461468aea6e9836461cce6f",
+      "geometry": "flat SBS",
+      "alpha": "independent static numeric texture"
+    },
+    {
+      "file": "app/godot/media/c04_alpha_f180_rgb.png",
+      "bytes": 32036,
+      "sha256": "5d1f11e71b84965f4da40f1c7da2788055be44aafa6bbe985f1967db512a32e8"
+    },
+    {
+      "file": "app/godot/media/c04_independent_rgb.png",
+      "bytes": 20935,
+      "sha256": "232f29a45987a8a4d3a1b562048aae048ee9e803b02b03f663167d3cfecfdf43"
+    },
+    {
+      "file": "app/godot/media/c04_packed_mask_oracle.png",
+      "bytes": 3749,
+      "sha256": "ea9f33b4d0619f177a845b7274b67d571fbc0f2c48d04b3cbb2c0cd33019daa3"
+    },
+    {
+      "file": "app/godot/media/c04_independent_mask.png",
+      "bytes": 17370,
+      "sha256": "8556d5247a6844d030d04803e506966e1c071adb01662ef9100cb9ef32a62476"
+    }
+  ],
+  "android_validation": "not_run",
+  "scope": "Display/alpha fixture only; no RVM quality or performance evidence"
+}

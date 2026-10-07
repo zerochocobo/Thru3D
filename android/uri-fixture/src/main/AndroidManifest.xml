@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries><package android:name="com.wapok.thru3d" /></queries>
+    <application android:label="VR Player URI Test Fixture" android:allowBackup="false">
+        <provider android:name=".FixtureDocumentsProvider"
+            android:authorities="org.vrpassthroughplayer.urifixture.documents"
+            android:exported="true" android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
+        </provider>
+        <receiver android:name=".FixtureCommandReceiver" android:exported="true" android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

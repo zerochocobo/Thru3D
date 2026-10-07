@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "path": "rvm-mnn/rvm.mnn",
+      "bytes": 14878420,
+      "sha256": "aa04a77a43e2e47d62d6425c51aef965466a9179228284f920ed5b4266c07185"
+    },
+    {
+      "path": "depth-mnn/depth.mnn",
+      "bytes": 48809068,
+      "sha256": "85b8f12d6b7e7fac252336847563e5adc2c96a9627c5f6b420b4d398c978b898"
+    }
+  ],
+  "manifests": {
+    "rvm-mnn": {
+      "schema_version": 4,
+      "backend": "MNN 3.6.1 OpenCL",
+      "source_onnx": "build\\rvm-ratio-one\\source\\rvm.ratio-one.onnx",
+      "source_sha256": "9b0f6b81ff9c9da63c0ebe6ce691c074d7f842e65f9736f7ec197306152a5f10",
+      "pruned_onnx_sha256": "70d0bceec4ca4fca6d82b30092360af7917bfdc9c9703652605ad936864abbd4",
+      "u8_onnx_sha256": "9ce238dfc99ef153c83b5423fe16fee142ca12b00732e5e67b53e96376556c30",
+      "fused_onnx_sha256": "fcf7eadb7855ec3a0d24b9bd91b21cfecc9e6f81e92c45ae909478dada75b811",
+      "marked_onnx_sha256": "e9b96a29c88b181a311b79f825ca03d55111929565dba3747228a95afe8228e9",
+      "mnn_sha256": "aa04a77a43e2e47d62d6425c51aef965466a9179228284f920ed5b4266c07185",
+      "student": {
+        "manifest": "models/manifest/rvm_student.json",
+        "sha256": "09f70651951ee9551960e5e05d80ba560e5d0aa41b09c8b4dcd0706cbf7a356c",
+        "conv_hardswish": 20,
+        "marked_onnx_sha256": "85ee303e7095eb5fac30d8dcc4702e9f4bfe574ac4611a00536dc743315e150a"
+      },
+      "mnn_runtime": "MNN 3.6.1 + tools/mnn/patch_mnn_vrpp.py (convolutions named *__hswish apply HardSwish)",
+      "fusion": {
+        "input": 3,
+        "hardswish": 20,
+        "expand": 4,
+        "gru": 4,
+        "project": 1,
+        "split": 7,
+        "rgba_input": 8,
+        "conv_hardswish": 20
+      },
+      "fused_vs_u8_max_abs": {
+        "256x144": {
+          "pha": 2.250075340270996e-06,
+          "interior": 2.250075340270996e-06,
+          "states": 1.239776611328125e-05
+        },
+        "384x216": {
+          "pha": 1.8998980522155762e-06,
+          "interior": 1.8998980522155762e-06,
+          "states": 8.165836334228516e-06
+        },
+        "512x288": {
+          "pha": 2.5480985641479492e-06,
+          "interior": 2.5480985641479492e-06,
+          "states": 1.0484829545021057e-05
+        },
+        "256x256": {
+          "pha": 2.0563602447509766e-06,
+          "interior": 2.0563602447509766e-06,
+          "states": 7.675960659980774e-06
+        },
+        "384x384": {
+          "pha": 2.853572368621826e-06,
+          "interior": 2.853572368621826e-06,
+          "states": 1.0371208190917969e-05
+        },
+        "512x512": {
+          "pha": 2.950429916381836e-06,
+          "interior": 2.950429916381836e-06,
+          "states": 8.337199687957764e-06
+        },
+        "320x320": {
+          "pha": 1.9744038581848145e-06,
+          "interior": 1.9744038581848145e-06,
+          "states": 7.539987564086914e-06
+        }
+      },
+      "converter_flags": [
+        "--keepInputFormat=0"
+      ],
+      "input_src_range": "0..255 (graph multiplies by 1/255)",
+      "input_channels": "RGBA (4th ignored)",
+      "outputs": [
+        "pha",
+        "r1o",
+        "r2o",
+        "r3o",
+        "r4o",
+        "pha_u8"
+      ],
+      "dynamic_shape": true,
+      "pruned_vs_source_max_abs": {
+        "256x144": 0.0,
+        "384x216": 0.0,
+        "512x288": 0.0,
+        "256x256": 0.0,
+        "384x384": 0.0,
+        "512x512": 0.0,
+        "320x320": 0.0
+      },
+      "u8_vs_unit_max_abs_and_rounding": {
+        "256x144": [
+          4.4405460357666016e-06,
+          0.0
+        ],
+        "384x216": [
+          4.738569259643555e-06,
+          0.0
+        ],
+        "512x288": [
+          3.874301910400391e-06,
+          0.0
+        ],
+        "256x256": [
+          4.500150680541992e-06,
+          0.0
+        ],
+        "384x384": [
+          6.034970283508301e-06,
+          0.0
+        ],
+        "512x512": [
+          4.894565790891647e-06,
+          0.0
+        ],
+        "320x320": [
+          5.066394805908203e-06,
+          0.0
+        ]
+      },
+      "branch": "ratio=1 upstream (refiner skipped), fgr pruned, u8 io for AHardwareBuffer zero-copy, bandwidth-fused graph with NC4HW4 inputs and HardSwish in the convolutions"
+    },
+    "depth-mnn": {
+      "schema_version": 1,
+      "backend": "MNN 3.6.1 OpenCL",
+      "model": "Depth Anything V2 Small",
+      "license": "Apache-2.0",
+      "source_onnx": "models\\source\\depth\\depth_anything_v2_small.onnx",
+      "source_sha256": "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c",
+      "input": "src float32 1x3xHxW RGB 0..1 (ImageNet normalization folded)",
+      "output": "depth float32 1x1xHxW relative inverse depth (larger = nearer)",
+      "width": 252,
+      "height": 140,
+      "frozen_onnx_sha256": "1c273ad875040582d8b507d05cd85ce3317d9c962c18563b0117917f7ba84119",
+      "mnn_sha256": "85b8f12d6b7e7fac252336847563e5adc2c96a9627c5f6b420b4d398c978b898",
+      "mnn_file": "depth.mnn",
+      "dynamic_ops_left": [
+        "Gather",
+        "Resize"
+      ],
+      "frozen_vs_source_rel_max": 5.237012373981997e-06,
+      "mnn_fp16_weights_vs_frozen_rel_max": 0.017661921679973602
+    }
+  }
+}

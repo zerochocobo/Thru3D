@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Quest immersive playback requires 6DoF hardware (Meta manifest contract). -->
+    <uses-feature android:name="android.hardware.vr.headtracking"
+        android:required="true" android:version="1" />
+    <!-- In-headset library: shared-storage videos, DLNA (SSDP multicast) and SMB shares. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Clone-voice M4A tracks stored beside library videos are MediaStore audio. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- The library's folder browser reads the whole disk once the user allows "All files access". -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- DLNA media servers describe themselves and answer Browse over plain LAN HTTP; Android
+         blocks cleartext HttpURLConnection traffic unless the app allows it. -->
+    <application android:usesCleartextTraffic="true">
+        <activity android:name=".MediaServersActivity" android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:excludeFromRecents="true" />
+        <activity android:name=".CloudAccountsActivity" android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:excludeFromRecents="true" />
+        <meta-data android:name="org.godotengine.plugin.v2.QuestPlayer"
+            android:value="org.vrpassthroughplayer.plugin.QuestPlayerPlugin" />
+        <!-- MNN dlopens the vendor OpenCL driver for RVM; the app linker namespace
+             only exposes public vendor libraries that the manifest declares. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+    </application>
+</manifest>
+

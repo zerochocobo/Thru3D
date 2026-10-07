@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "builder_revision": "fdf74f6830c47dbaa8a22ac79726e8303f1db5af",
+  "ndk": "r30 / 30.0.16248370",
+  "arch": "arm64",
+  "sources": [
+    {
+      "name": "mbedtls",
+      "revision": "3.6.7",
+      "archive": "mbedtls-3.6.7.tar.bz2",
+      "url": "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2"
+    },
+    {
+      "name": "dav1d",
+      "revision": "362bc1138228390a0a521ecf3af18b23c6afeb9e",
+      "archive": "dav1d-362bc113.tar.gz",
+      "url": "https://codeload.github.com/videolan/dav1d/tar.gz/362bc1138228390a0a521ecf3af18b23c6afeb9e"
+    },
+    {
+      "name": "ffmpeg",
+      "revision": "094a2f8a2a5e7fa64736e067de224ce28fdf5979",
+      "archive": "ffmpeg-094a2f8a.tar.gz",
+      "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/094a2f8a2a5e7fa64736e067de224ce28fdf5979"
+    },
+    {
+      "name": "freetype2",
+      "revision": "2.14.3",
+      "archive": "freetype-2.14.3.tar.xz",
+      "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz"
+    },
+    {
+      "name": "fribidi",
+      "revision": "1.0.16",
+      "archive": "fribidi-1.0.16.tar.xz",
+      "url": "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz"
+    },
+    {
+      "name": "harfbuzz",
+      "revision": "14.4.0",
+      "archive": "harfbuzz-14.4.0.tar.xz",
+      "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.4.0/harfbuzz-14.4.0.tar.xz"
+    },
+    {
+      "name": "unibreak",
+      "revision": "8.0",
+      "archive": "libunibreak-8.0.tar.gz",
+      "url": "https://github.com/adah1972/libunibreak/releases/download/libunibreak_8_0/libunibreak-8.0.tar.gz"
+    },
+    {
+      "name": "libxml2",
+      "revision": "2.15.4",
+      "archive": "libxml2-2.15.4.tar.xz",
+      "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz"
+    },
+    {
+      "name": "fontconfig",
+      "revision": "2.18.3",
+      "archive": "fontconfig-2.18.3.tar.gz",
+      "url": "https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.3/fontconfig-2.18.3.tar.gz"
+    },
+    {
+      "name": "libass",
+      "revision": "b2fe9d8770678a7b5271387d38c20657ebf3429a",
+      "archive": "libass-b2fe9d87.tar.gz",
+      "url": "https://codeload.github.com/libass/libass/tar.gz/b2fe9d8770678a7b5271387d38c20657ebf3429a"
+    },
+    {
+      "name": "lua",
+      "revision": "5.2.4",
+      "archive": "lua-5.2.4.tar.gz",
+      "url": "https://www.lua.org/ftp/lua-5.2.4.tar.gz"
+    },
+    {
+      "name": "libplacebo",
+      "revision": "3330a515d62139259c26239014f286e233bd3a5c",
+      "archive": "libplacebo-3330a515.tar.gz",
+      "url": "https://codeload.github.com/haasn/libplacebo/tar.gz/3330a515d62139259c26239014f286e233bd3a5c"
+    },
+    {
+      "name": "curl",
+      "revision": "8.21.0",
+      "archive": "curl-8.21.0.tar.gz",
+      "url": "https://curl.se/download/curl-8.21.0.tar.gz"
+    },
+    {
+      "name": "mpv",
+      "revision": "0b7ed670f7c353dd3dd4f8ae0fc788a181a15aa6",
+      "archive": "mpv-0b7ed67.tar.gz",
+      "url": "https://codeload.github.com/mpv-player/mpv/tar.gz/0b7ed670f7c353dd3dd4f8ae0fc788a181a15aa6"
+    },
+    {
+      "name": "libplacebo/3rdparty/fast_float",
+      "revision": "97b54ca9e75f5303507699d27c6b4f4efe4641a1",
+      "archive": "fast_float-97b54ca9.tar.gz",
+      "url": "https://codeload.github.com/fastfloat/fast_float/tar.gz/97b54ca9e75f5303507699d27c6b4f4efe4641a1"
+    },
+    {
+      "name": "libplacebo/3rdparty/glad",
+      "revision": "73db193f853e2ee079bf3ca8a64aa2eaf6459043",
+      "archive": "glad-73db193f.tar.gz",
+      "url": "https://codeload.github.com/Dav1dde/glad/tar.gz/73db193f853e2ee079bf3ca8a64aa2eaf6459043"
+    },
+    {
+      "name": "libplacebo/3rdparty/jinja",
+      "revision": "15206881c006c79667fe5154fe80c01c65410679",
+      "archive": "jinja-15206881.tar.gz",
+      "url": "https://codeload.github.com/pallets/jinja/tar.gz/15206881c006c79667fe5154fe80c01c65410679"
+    },
+    {
+      "name": "libplacebo/3rdparty/markupsafe",
+      "revision": "297fc8e356e6836a62087949245d09a28e9f1b13",
+      "archive": "markupsafe-297fc8e3.tar.gz",
+      "url": "https://codeload.github.com/pallets/markupsafe/tar.gz/297fc8e356e6836a62087949245d09a28e9f1b13"
+    }
+  ]
+}

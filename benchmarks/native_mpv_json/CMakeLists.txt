@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22)
+project(MpvJsonOracle LANGUAGES CXX)
+add_executable(mpv_json_oracle json_oracle.cpp)
+target_compile_features(mpv_json_oracle PRIVATE cxx_std_17)
+if(MSVC)
+    target_compile_options(mpv_json_oracle PRIVATE /EHsc /W4 /WX)
+endif()

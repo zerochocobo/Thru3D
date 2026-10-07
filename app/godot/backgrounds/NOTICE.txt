@@ -1,0 +1,17 @@
+Belfast Sunset (Pure Sky)
+Source: https://polyhaven.com/a/belfast_sunset_puresky
+License: CC0 1.0 Universal (see CC0-1.0.txt).
+License verified: 2026-10-06, https://polyhaven.com/license
+
+Photography: Dimitrios Savva
+Processing: Greg Zaal
+Sky edits: Jarod Guest
+
+The included belfast_sunset_puresky.jpg is the official, unmodified
+8192 x 4096 tonemapped JPEG (16,150,434 bytes).
+MD5: 5313193c1b09d9776dd3395d08b6beee
+Godot imports it with mipmaps and GPU texture compression at its full dimensions.
+The 24K HDR original is a development source archive, not packaged in the app.
+
+CC0 permits commercial use, modification and redistribution without attribution.
+This voluntary credit does not imply endorsement by the authors or Poly Haven.

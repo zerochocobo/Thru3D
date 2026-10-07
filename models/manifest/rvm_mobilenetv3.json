@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "model_id": "rvm_mobilenetv3_fp32_v1",
+  "source": "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx",
+  "license": "GPL-3.0",
+  "license_source": "https://github.com/PeterL1n/RobustVideoMatting/blob/v1.0.0/LICENSE",
+  "file": "models/source/rvm_mobilenetv3_fp32.onnx",
+  "bytes": 14975696,
+  "sha256": "88d4531297118f595bf2fd60f6f566aec2e559393802d1f436c380f0cbbd2828",
+  "opset": 12,
+  "source_layout": "NCHW",
+  "source_dtype": "float32",
+  "source_rgb_range": [
+    0.0,
+    1.0
+  ],
+  "inputs": [
+    "src",
+    "r1i",
+    "r2i",
+    "r3i",
+    "r4i",
+    "downsample_ratio"
+  ],
+  "outputs": [
+    "fgr",
+    "pha",
+    "r1o",
+    "r2o",
+    "r3o",
+    "r4o"
+  ],
+  "state_channels": [
+    16,
+    20,
+    40,
+    64
+  ],
+  "bootstrap_state_shape": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "independent_state_per_eye": true,
+  "android_conversion": "six_fixed_profiles_full_recurrent_windows_cpu_fp32_verified",
+  "android_bundled": true,
+  "quest_performance": "short_single_eye_validation_timings_recorded; sustained_stereo_xr_not_tested",
+  "android_device_execution": "six_profiles_cpu_vulkan_numerical_jni_passed",
+  "quality_tested": false,
+  "video_alpha_integrated": false,
+  "android_profile": {
+    "id": "256x144_ratio1_fp32",
+    "pnnx": "20260704",
+    "ncnn": "20260526",
+    "param_sha256": "adb2d27d8a5fdd6da66926b23da127044fa88ce04229464fed320db08854c63e",
+    "bin_sha256": "a2737ba6bdf5a084f5a4974ef552b91fecdad12683dd030efc06ce371b99c786",
+    "host_cpu_numerical": "passed",
+    "eye_isolation": "passed",
+    "reset": "passed"
+  },
+  "android_profiles": {
+    "manifest": "models/manifest/rvm_profiles.json",
+    "keys": [
+      "256x144",
+      "384x216",
+      "512x288",
+      "256x256",
+      "384x384",
+      "512x512"
+    ],
+    "host_cpu_numerical": "passed",
+    "device_execution": "six_profiles_cpu_vulkan_numerical_jni_passed",
+    "runtime_bridge": "passed_actual_jni_checks",
+    "reference": "docs/R01_PROFILE_RUNTIME_20261003_CN.md",
+    "device_evidence": "artifacts/device/20261003_210153_automatic"
+  }
+}
