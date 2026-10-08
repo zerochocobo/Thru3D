@@ -1,0 +1,4 @@
+Godot OpenXR Hand Tracking Demo
+Source: https://github.com/godotengine/godot-demo-projects/tree/3e08537616661a5883831628decab4c526260289/xr/openxr_hand_tracking_demo/assets/gltf
+Revision: 3e08537616661a5883831628decab4c526260289
+Unmodified hand models and texture. License: MIT (see LICENSE.txt).

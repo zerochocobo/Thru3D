@@ -41,7 +41,10 @@ internal object MediaServerStore {
 }
 
 internal class MediaServerLibrary(private val context: () -> Context?, private val streams: () -> LocalStreamServer,
-    private val nextId: () -> Int, private val emit: (Int, String) -> Unit) {
+    private val nextId: () -> Int,
+    private val accounts: () -> List<MediaServerAccount> = {
+        MediaServerStore.accounts(context() ?: throw MediaServerFailure("Server unavailable"))
+    }, private val emit: (Int, String) -> Unit) {
     private val pool = ThreadPoolExecutor(3, 3, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue(24), { Thread(it, "QuestMediaServer") })
     private class Job(val server: String) { @Volatile var http: MediaServerHttp? = null; @Volatile var future: FutureTask<Unit>? = null }
     private val jobs = ConcurrentHashMap<Int, Job>()
@@ -54,12 +57,13 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
         val id = nextId(); val job = Job(if (req.optString("action") == "remove") "" else req.optString("server_id")); jobs[id] = job
         val task = FutureTask<Unit> {
             val result = try {
-                val app = context() ?: throw MediaServerFailure("Server unavailable")
-                if (req.optString("action") == "servers") JSONObject().put("servers", JSONArray().apply { MediaServerStore.accounts(app).forEach { put(it.json()) } })
+                val payload = if (req.optString("action") == "servers") JSONObject().put("servers", JSONArray().apply { accounts().forEach { put(it.json()) } })
                 else if (req.optString("action") == "remove") {
+                    val app = context() ?: throw MediaServerFailure("Server unavailable")
                     MediaServerStore.remove(app, req.getString("server_id"))
                     JSONObject()
                 } else {
+                    val app = context() ?: throw MediaServerFailure("Server unavailable")
                     val account = MediaServerStore.get(app, job.server)
                     MediaServerHttp(account).use { http ->
                         job.http = http
@@ -73,7 +77,9 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
                             else -> throw MediaServerFailure("Invalid server request")
                         }
                     }
-                }.put("state", "ready")
+                }
+                // Mark every successful branch, including the local account list.
+                payload.put("state", "ready")
             } catch (e: Exception) { JSONObject().put("state", "error").put("error", if (e is MediaServerFailure) e.code else "Server unavailable") }
             if (jobs.remove(id, job) && !closed && !Thread.currentThread().isInterrupted)
                 emit(id, result.put("source", "medialib").put("server_id", req.optString("server_id")).put("action", req.optString("action"))
@@ -148,6 +154,10 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
             instances.forEach { instance ->
                 instance.jobs.filterValues { it.server == server }.keys.toList().forEach(instance::cancel)
                 instance.leases.filterValues { it.first == server }.keys.toList().forEach(instance::release)
+                // Quest can keep the player resumed behind the native account window.
+                // Notify after persistence instead of relying on another onMainResume.
+                if (!instance.closed) instance.emit(0, JSONObject().put("source", "medialib")
+                    .put("state", "accounts_changed").toString())
             }
         }
     }

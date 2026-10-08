@@ -4,6 +4,8 @@
 
 Standalone Android VR/MR media player for Meta Quest and PICO. Thru3D combines a Godot OpenXR interface, Android media access, a native libmpv renderer, and MNN inference for video matting and depth-based stereo rendering.
 
+Current source version: **0.2.1** (Android versionCode **4**). An experimental standard OpenXR Android export is also available.
+
 ## Features
 
 - Video and photo viewing: flat, 180° and 360° projections; mono and side-by-side stereo.
@@ -12,6 +14,8 @@ Standalone Android VR/MR media player for Meta Quest and PICO. Thru3D combines a
 - Local Android document access, SMB, WebDAV, DLNA and media-server libraries; native 115/Baidu adapters.
 - Audio tracks, subtitles, playback controls and per-file viewing preferences.
 - Controller ray/trigger selection and hand interaction; English, Chinese and Japanese UI.
+- Persistent timestamp bookmarks, source-frame previews for recent playback, and paged media navigation.
+- Rendered hands/controllers and display-quality controls, including sharpness and flat-screen adjustments.
 
 ## Source release
 
@@ -62,6 +66,8 @@ $env:THRU3D_TOOL_ROOT = Join-Path $HOME '.cache/thru3d-toolchain'
 ./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor Quest
 # PICO uses a separate export preset and vendor loader.
 ./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor Pico
+# Experimental: requires a compatible standard OpenXR runtime on the device.
+./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor OpenXR
 ```
 
 Outputs are written under the ignored `artifacts` directory. A locally built application has your own signing identity. It cannot necessarily update an installed distribution signed by another key.
@@ -72,7 +78,7 @@ Open the VR menu with the left Menu button. Point a controller ray at a control 
 
 ## Status and limitations
 
-- Early source release; Android ARM64 builds use separate Quest and PICO vendor presets.
+- Early source release; Android ARM64 builds use separate Quest, PICO and experimental standard OpenXR presets.
 - Quest 3 has been used during development. PICO packaging checks do not establish PICO hardware playback, passthrough or hand-tracking validation.
 - Matting quality, GPU support and sustained performance depend on the model, device and video. Host/packaging checks are not headset performance measurements.
 - AI depth operates on flat mono content; passthrough matting is limited to supported 180° projections.

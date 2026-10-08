@@ -105,9 +105,11 @@ func _run() -> void:
 			centres.append(sum / maxi(1,count))
 		disparities.append(centres[0] - centres[1])
 	if absf(disparities[0]) > 1: failures.append("Off must eliminate eye disparity")
-	for i in range(1, disparities.size()):
+	# 400% input is clamped to the shared 200% maximum, not a stronger output.
+	for i in range(1, disparities.size() - 1):
 		if disparities[i] <= maxf(2, disparities[i-1] * 1.5): failures.append("Strength must visibly increase eye disparity: " + str(disparities))
-	print("Photo rendered disparity at 0/50/100/200/400%: " + str(disparities))
+	if absf(disparities[4] - disparities[3]) > 1: failures.append("Above-maximum strength must preserve the 200% output")
+	print("Photo rendered disparity at 0/50/100/200% and clamped 400% input: " + str(disparities))
 	photo.set_depth(false); photo.platform = null
 	# Exercise full-size downloaded JPG in the real shader, with the current app UI.
 	var fixture := OS.get_environment("QUEST_PHOTO_FIXTURE")
@@ -143,7 +145,7 @@ func _run() -> void:
 	(await frame()).save_png(output.path_join("flat.png"))
 	# Actual menu render of the shared strength popup over the flat fixture.
 	photo.platform = DepthHost.new()
-	photo.depth_requested = true; photo.depth_strength = 2.5
+	photo.depth_requested = true; photo.depth_strength = 1.5
 	menu.refresh(); menu._activate(menu.PHOTO_DEPTH)
 	(await frame()).save_png(output.path_join("depth-slider.png"))
 	menu._activate(menu.PHOTO_DEPTH)

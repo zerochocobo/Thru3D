@@ -1,6 +1,6 @@
 extends RefCounted
-## Pictures for library tiles. Local and SMB videos get one only after they were played: a frame
-## of the displayed picture (see capture). DLNA items use the cover their server offers. Nothing
+## Pictures for library tiles. Played videos get a frame of the displayed picture (see capture).
+## DLNA items prefer the cover their server offers, with the played frame as fallback. Nothing
 ## here opens or reads a video file. Settings > clear cache empties the directory.
 
 const DIRECTORY := "user://thumbnails"
@@ -8,8 +8,16 @@ const SIZE := Vector2i(320, 180)
 const SHADER_2D := preload("res://shaders/thumbnail.gdshader")
 const SHADER_OES := preload("res://shaders/thumbnail_oes.gdshader")
 const KEEP_TEXTURES := 96
+const MAX_IMAGES := 256
+const MAX_BYTES := 32 * 1024 * 1024
 
 static var _textures: Dictionary = {} # file path -> ImageTexture, most recent last
+static var _protected: Dictionary = {} # the current recent entries survive normal browsing
+
+static func protect_keys(keys: Array) -> void:
+	_protected.clear()
+	for key in keys.slice(0, 32):
+		if key is String and not key.is_empty(): _protected[path_for(key)] = true
 
 static func path_for(key: String) -> String:
 	return DIRECTORY.path_join(key.sha1_text() + ".jpg")
@@ -45,7 +53,33 @@ static func store(key: String, image: Image) -> bool:
 	DirAccess.make_dir_recursive_absolute(DIRECTORY)
 	var path := path_for(key)
 	_textures.erase(path)
-	return picture.save_jpg(path, 0.85) == OK
+	if picture.save_jpg(path, 0.85) != OK: return false
+	prune(MAX_IMAGES, MAX_BYTES, path)
+	return true
+
+## Evict only generated SHA1 JPEG names inside the thumbnail directory.
+static func prune(max_images: int = MAX_IMAGES, max_bytes: int = MAX_BYTES, keep: String = "") -> void:
+	var dir := DirAccess.open(DIRECTORY)
+	if not dir: return
+	var records: Array[Dictionary] = []
+	var count := 0
+	var bytes := 0
+	for name in dir.get_files():
+		if name.length() != 44 or not name.ends_with(".jpg") or not name.get_basename().is_valid_hex_number(): continue
+		var path := DIRECTORY.path_join(name)
+		var file := FileAccess.open(path, FileAccess.READ)
+		if not file: continue
+		var size := file.get_length()
+		file.close()
+		count += 1; bytes += size
+		if path != keep and not _protected.has(path):
+			records.append({"name": name, "bytes": size, "time": FileAccess.get_modified_time(path)})
+	records.sort_custom(func(a: Dictionary, b: Dictionary): return a.time < b.time if a.time != b.time else str(a.name) < str(b.name))
+	for record in records:
+		if count <= max_images and bytes <= max_bytes: break
+		if dir.remove(str(record.name)) == OK:
+			count -= 1; bytes -= int(record.bytes)
+			_textures.erase(DIRECTORY.path_join(str(record.name)))
 
 static func fit(image: Image) -> Image:
 	var picture := image.duplicate() as Image
@@ -116,6 +150,7 @@ static func capture(parent: Node, color: RID, decoder: bool, stereo_sbs: bool, c
 	viewport.add_child(quad)
 	parent.add_child(viewport)
 	RenderingServer.material_set_param(material.get_rid(), "color_texture", color)
+	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	var image := viewport.get_texture().get_image()
 	RenderingServer.material_set_param(material.get_rid(), "color_texture", null)

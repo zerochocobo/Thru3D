@@ -7,9 +7,11 @@ import java.util.Base64
 
 internal class CloudFile(val name: String, val folder: Boolean, val size: Long, val id: String, val pickCode: String = "")
 internal class CloudLink(val url: String, val headers: (URI) -> Map<String, String>)
+internal class CloudPage(val files: List<CloudFile>, val nextOffset: Int, val total: Int = -1)
 
 /** Small, read-only web-session adapters. No OpenList runtime or driver code. */
-internal class CloudDrive(val provider: String, private val cookie: String, private val http: CloudTransport = CloudHttp) {
+internal class CloudDrive(val provider: String, private val cookie: String, private val http: CloudTransport = CloudHttp,
+    private val metadata: CloudMetadata = CloudMetadata()) {
     init { require(provider in PROVIDERS && CloudHttp.validCookie(cookie)) }
     private fun get(url: String, values: Map<String, String> = emptyMap()) = http.request(CloudHttp.query(url, values), cookie, null)
     private fun checked(response: CloudResponse): JSONObject {
@@ -27,52 +29,88 @@ internal class CloudDrive(val provider: String, private val cookie: String, priv
     }
 
     fun list(path: String): List<CloudFile> {
-        require(path.startsWith('/') && path.split('/').none { it == "." || it == ".." || '\u0000' in it })
-        return if (provider == P115) list115(path) else listBaidu(path)
-    }
-    private fun list115(path: String): List<CloudFile> {
-        val folder = if (path == "/") "0" else checked(get("https://webapi.115.com/files/getid", mapOf("path" to path))).get("id").toString()
-        if (folder == "0" && path != "/") throw CloudFailure("cloud_file_missing")
         val result = ArrayList<CloudFile>()
+        visit(path) { result.addAll(it); false }
+        return result
+    }
+    fun page(path: String, offset: Int = 0, refresh: Boolean = false): CloudPage {
+        require(path.startsWith('/') && path.split('/').none { it == "." || it == ".." || '\u0000' in it })
+        require(offset >= 0 && offset <= Int.MAX_VALUE - PAGE_SIZE)
+        if (Thread.currentThread().isInterrupted) throw CloudFailure()
+        if (refresh) metadata.invalidate(path)
+        metadata.page(path, offset)?.let { return it }
+        val page = if (provider == P115) page115(path, offset) else pageBaidu(path, offset)
+        val keys = page.files.map { (if (it.folder) "d" else "f") + it.id }
+        if (keys.toSet().size != keys.size) throw CloudFailure()
+        // An endpoint ignoring offset must not create an endless series of identical pages.
+        if (offset > 0 && page.files.isNotEmpty()) {
+            val previous = metadata.previous(path, offset)
+            if (previous != null && previous.files.map { (if (it.folder) "d" else "f") + it.id } == keys) throw CloudFailure()
+        }
+        if (Thread.currentThread().isInterrupted) throw CloudFailure()
+        page.files.forEach { metadata.put(CloudPaths.child(path, it.name), it) }
+        metadata.put(path, offset, page)
+        return page
+    }
+    private fun page115(path: String, offset: Int): CloudPage {
+        val folder = if (path == "/") "0" else metadata.file(path)?.takeIf { it.folder }?.id
+            ?: checked(get("https://webapi.115.com/files/getid", mapOf("path" to path))).get("id").toString()
+        if (folder == "0" && path != "/") throw CloudFailure("cloud_file_missing")
+        if (path != "/") metadata.put(path, CloudFile(path.substringAfterLast('/'), true, 0, folder))
+        val result = ArrayList<CloudFile>()
+        val json = checked(get("https://webapi.115.com/files", mapOf("cid" to folder, "offset" to "$offset",
+            "limit" to "$PAGE_SIZE", "show_dir" to "1", "count_folders" to "1", "cur" to "1", "fc_mix" to "0",
+            "o" to "file_name", "asc" to "1", "format" to "json")))
+        val items = json.getJSONArray("data")
+        if (json.has("offset") && json.getInt("offset") != offset) throw CloudFailure()
+        if (items.length() > PAGE_SIZE) throw CloudFailure()
+        for (i in 0 until items.length()) {
+            val item = items.getJSONObject(i)
+            val directory = !item.has("fid") || item.optString("fid").isEmpty()
+            val id = item.get(if (directory) "cid" else "fid").toString()
+            result.add(CloudFile(item.getString("n"), directory, item.optLong("s"), id, item.optString("pc")))
+        }
+        val next = offset + items.length()
+        val count = json.getInt("count")
+        if (items.length() == 0 && offset < count) throw CloudFailure()
+        if (count < 0) throw CloudFailure()
+        return CloudPage(result, if (next < count) next else -1, count)
+    }
+    private fun pageBaidu(path: String, offset: Int): CloudPage {
+        require(offset % PAGE_SIZE == 0)
+        val result = ArrayList<CloudFile>()
+        val json = checked(get("https://pan.baidu.com/api/list", mapOf("dir" to path, "page" to "${offset / PAGE_SIZE + 1}",
+            "num" to "$PAGE_SIZE", "order" to "name", "desc" to "0", "showempty" to "0", "web" to "1", "clienttype" to "0")))
+        val items = json.getJSONArray("list")
+        if (items.length() > PAGE_SIZE) throw CloudFailure()
+        for (i in 0 until items.length()) {
+            val item = items.getJSONObject(i)
+            val id = item.get("fs_id").toString()
+            result.add(CloudFile(item.getString("server_filename"), item.optInt("isdir") == 1, item.optLong("size"), id))
+        }
+        return CloudPage(result, if (items.length() == PAGE_SIZE) offset + PAGE_SIZE else -1)
+    }
+    private fun visit(path: String, accept: (List<CloudFile>) -> Boolean) {
         var offset = 0
         val seen = HashSet<String>()
-        repeat(200) {
-            val json = checked(get("https://webapi.115.com/files", mapOf("cid" to folder, "offset" to "$offset",
-                "limit" to "500", "show_dir" to "1", "o" to "file_name", "asc" to "1", "format" to "json")))
-            val items = json.getJSONArray("data")
-            if (items.length() == 0) return result
-            for (i in 0 until items.length()) {
-                val item = items.getJSONObject(i)
-                val directory = !item.has("fid") || item.optString("fid").isEmpty()
-                val id = item.get(if (directory) "cid" else "fid").toString()
-                if (!seen.add((if (directory) "d" else "f") + id)) throw CloudFailure()
-                result.add(CloudFile(item.getString("n"), directory, item.optLong("s"), id, item.optString("pc")))
-            }
-            offset += items.length()
-            if (offset >= json.getInt("count")) return result
-        }
-        throw CloudFailure("cloud_folder_too_large")
-    }
-    private fun listBaidu(path: String): List<CloudFile> {
-        val result = ArrayList<CloudFile>()
-        val seen = HashSet<String>()
-        for (page in 1..200) {
-            val json = checked(get("https://pan.baidu.com/api/list", mapOf("dir" to path, "page" to "$page",
-                "num" to "1000", "order" to "name", "desc" to "0", "showempty" to "0", "web" to "1", "clienttype" to "0")))
-            val items = json.getJSONArray("list")
-            for (i in 0 until items.length()) {
-                val item = items.getJSONObject(i)
-                val id = item.get("fs_id").toString()
-                if (!seen.add(id)) throw CloudFailure()
-                result.add(CloudFile(item.getString("server_filename"), item.optInt("isdir") == 1, item.optLong("size"), id))
-            }
-            if (items.length() < 1000) return result
+        repeat(5000) {
+            val page = page(path, offset)
+            for (file in page.files) if (!seen.add((if (file.folder) "d" else "f") + file.id)) throw CloudFailure()
+            if (accept(page.files) || page.nextOffset < 0) return
+            offset = page.nextOffset
         }
         throw CloudFailure("cloud_folder_too_large")
     }
 
-    fun find(path: String): CloudFile = list(path.substringBeforeLast('/').ifEmpty { "/" })
-        .firstOrNull { !it.folder && it.name == path.substringAfterLast('/') } ?: throw CloudFailure("cloud_file_missing")
+    fun find(path: String): CloudFile {
+        metadata.file(path)?.takeIf { !it.folder }?.let { return it }
+        var found: CloudFile? = null
+        visit(path.substringBeforeLast('/').ifEmpty { "/" }) { files ->
+            found = files.firstOrNull { !it.folder && it.name == path.substringAfterLast('/') }
+            found != null
+        }
+        return found ?: throw CloudFailure("cloud_file_missing")
+    }
 
     fun resolve(file: CloudFile): CloudLink {
         if (file.folder || file.size <= 0) throw CloudFailure("cloud_file_missing")
@@ -113,6 +151,7 @@ internal class CloudDrive(val provider: String, private val cookie: String, priv
         "Referer" to if (provider == P115) "https://115.com/" else "https://pan.baidu.com/disk/main")
 
     companion object {
+        const val PAGE_SIZE = 48
         const val P115 = "115"
         const val BAIDU = "baidu"
         val PROVIDERS = linkedMapOf(P115 to "115", BAIDU to "百度网盘")

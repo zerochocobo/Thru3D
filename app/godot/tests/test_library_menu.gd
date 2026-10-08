@@ -10,6 +10,16 @@ class Catalog extends RefCounted:
 	func list_recent() -> Array[Dictionary]:
 		return [{"uri": "smb://srv1/Video/a.mp4", "title": "最近 A", "position_ms": 61000}]
 
+class PagedCatalog extends RefCounted:
+	var count := 32
+	func list_recent() -> Array[Dictionary]:
+		var result: Array[Dictionary] = []
+		for index in count:
+			var photo := index >= 30
+			result.append({"uri": "file:///recent-page/%d.%s" % [index, "jpg" if photo else "mp4"],
+				"title": "Recent %d" % index, "position_ms": 1000, "kind": "image" if photo else "video"})
+		return result
+
 ## Answers like the Android plugin: an id now, media_list(id, json) later.
 class FakePlatform extends Object:
 	signal media_list(id: int, payload: String)
@@ -97,6 +107,31 @@ func _run() -> void:
 	menu.attach_platform(platform)
 	menu.toggle()
 	check(menu.section == Menu.Section.RECENT and titles(menu) == ["最近 A"], "Opens on the play history")
+	var paged := PagedCatalog.new()
+	menu.catalog = paged; menu.refresh()
+	check(menu.rows.size() == 12 and menu._recent_page_count() == 3 and menu._max_scroll() == 0,
+		"32 recent records use three bounded pages of 12 cards")
+	check(menu._buttons.filter(func(b): return b.target == Menu.RECENT_PREVIOUS)[0].enabled == false
+		and menu._buttons.filter(func(b): return b.target == Menu.RECENT_NEXT)[0].enabled,
+		"First page disables previous and enables next")
+	var next_button: Dictionary = menu._buttons.filter(func(b): return b.target == Menu.RECENT_NEXT)[0]
+	var next_point: Vector2 = next_button.rect.get_center()
+	var next_origin := menu.to_global(Vector3(next_point.x, next_point.y, 1))
+	menu.press_pointer("right_hand", next_origin, -menu.global_basis.z, true)
+	menu.release_pointer("right_hand", next_origin, -menu.global_basis.z, true)
+	check(menu._recent_page == 1 and menu.rows[0].uri == "file:///recent-page/12.mp4", "Ray trigger selects the next recent page")
+	menu.stick_scroll(-1, 1.0)
+	check(menu._recent_page == 1 and menu.scroll == 0, "Thumbstick does not choose or turn recent pages")
+	check(menu.video_queue().size() == 30 and menu.image_queue().size() == 2, "Playback queues retain the complete bounded history across pages")
+	menu._turn_recent_page(99)
+	check(menu._recent_page == 2 and menu.rows.size() == 8
+		and not menu._buttons.filter(func(b): return b.target == Menu.RECENT_NEXT)[0].enabled,
+		"Final partial page disables next")
+	menu.media_filter = 2; menu.refresh()
+	check(menu._recent_page == 0 and menu.rows.size() == 2 and menu._recent_page_count() == 1, "Filter recalculates and clamps the recent page")
+	paged.count = 0; menu.media_filter = 0; menu.refresh()
+	check(menu.rows.is_empty() and menu._recent_page_count() == 1, "Empty history is a stable single empty page")
+	menu.catalog = Catalog.new(); menu._reset_navigation(); menu.refresh()
 	# Clearing history takes a second press on the same button.
 	menu._activate(Menu.CLEAR_HISTORY)
 	check(settings_events.is_empty() and menu._confirm == "clear_history", "First press only arms clearing")
@@ -210,6 +245,7 @@ func _run() -> void:
 	menu._activate(Menu.TAB_BASE + Menu.VIDEO_TAB)
 	menu._activate(Menu.ROW_BASE + 2)
 	check(settings_events.back() == ["output_width", 4096], "Output cap setting")
+	menu._activate(Menu.TAB_BASE + Menu.GENERAL_TAB)
 	check(titles(menu).back() == "Save play history" and menu.rows.back().selected, "History is saved by default")
 	menu._activate(Menu.ROW_BASE + menu.rows.size() - 1)
 	check(settings_events.back() == ["history", false], "History can be switched off")
@@ -220,7 +256,8 @@ func _run() -> void:
 	menu._activate(Menu.TAB_BASE + Menu.ABOUT_TAB)
 	var about_text := "\n".join(menu.find_children("*", "Label3D", true, false).map(func(label): return label.text))
 	check(about_text.contains("Thru3D Media Player") and about_text.contains("FFSky Studio")
-		and about_text.contains("ffskyteam@gmail.com") and about_text.contains("https://wapok.com"), "About brand and support")
+		and about_text.contains("ffskyteam@gmail.com") and about_text.contains("https://wapok.com")
+		and about_text.contains("https://github.com/zerochocobo/Thru3D"), "About brand and support")
 	menu._activate(Menu.ROW_BASE + 5)
 	check(menu.rows[0].title == "Belfast Sunset (Pure Sky)" and menu.rows[0].detail.contains("Poly Haven · CC0 1.0")
 		and menu.rows[0].detail.contains("Dimitrios Savva / Greg Zaal / Jarod Guest") and menu.rows[1].title == "Godot",
@@ -325,11 +362,10 @@ func _run() -> void:
 	menu.refresh()
 	check(menu.text_snapshot().contains("本地文件") and menu.text_snapshot().contains("需要媒体访问权限") 		and not menu.text_snapshot().contains("Local files"), "Chinese menu and status")
 	menu._activate(Menu.NAV_BASE + Menu.Section.SETTINGS)
-	menu._activate(Menu.TAB_BASE + Menu.ABOUT_TAB)
-	menu._activate(Menu.ROW_BASE + 4)
-	check(menu.rows.size() == 5 and menu.rows[1].title == "简体中文" and menu.rows[2].title == "繁體中文"
-		and menu.rows[3].title == "日本語" and menu.rows[4].title == "English"
-		and menu.rows[0].title == "跟随系统", "About lists all languages, each named in itself")
+	menu._activate(Menu.TAB_BASE + Menu.GENERAL_TAB)
+	check(menu.rows.size() == 7 and menu.rows[1].title == "语言 · 简体中文" and menu.rows[2].title == "语言 · 繁體中文"
+		and menu.rows[3].title == "语言 · 日本語" and menu.rows[4].title == "语言 · English"
+		and menu.rows[0].title == "语言 · 跟随系统", "General lists all languages, each named in itself")
 	var chosen := []
 	menu.setting_changed.connect(func(key, value): chosen.append([key, value]))
 	menu._activate(Menu.ROW_BASE + 4)

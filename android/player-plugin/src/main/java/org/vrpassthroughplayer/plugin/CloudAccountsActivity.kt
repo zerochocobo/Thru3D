@@ -13,7 +13,7 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** Two direct providers, plus an optional read-only LAN WebDAV endpoint. */
-class CloudAccountsActivity : Activity() {
+class CloudAccountsActivity : NativePanelActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var body: LinearLayout
     private lateinit var status: TextView
@@ -24,6 +24,7 @@ class CloudAccountsActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        if (isFinishing) return
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         accounts()
     }
@@ -84,6 +85,11 @@ class CloudAccountsActivity : Activity() {
             isSaveEnabled = false; importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         }
         body.addView(name)
+        if (existing != null) button(tr("Save name", "保存名称")) {
+            val title = name.text.toString().trim()
+            if (title.isEmpty()) { status.text = tr("Enter a name", "请输入名称"); return@button }
+            task({ CloudLibrary.rename(existing.getString("id"), title) }) { accounts() }
+        }
         fun connect(cookie: String) {
             val title = name.text.toString().trim().ifBlank { CloudLibrary.providers.getValue(provider) }
             task({ CloudLibrary.connect(provider, title, cookie, existing?.getString("id")) }) { accounts() }
@@ -97,7 +103,8 @@ class CloudAccountsActivity : Activity() {
             loginDialog = Cloud115LoginDialog(this, ::connect).also { it.show() }
         }
         if (existing != null) button(tr("Remove account", "移除账号")) {
-            AlertDialog.Builder(this).setMessage(tr("Remove this account?", "移除此账号？"))
+            AlertDialog.Builder(this).setTitle(existing.getString("name"))
+                .setMessage(tr("Remove this account from the player?", "从播放器移除此账号？"))
                 .setNegativeButton(tr("Cancel", "取消"), null)
                 .setPositiveButton(tr("Remove", "移除")) { _, _ -> task({ CloudLibrary.remove(existing.getString("id")) }) { accounts() } }.show()
         }

@@ -42,6 +42,11 @@ func reject() -> void:
 	pending = false
 	in_flight = 0
 
+## The user's seek target stays on the timeline while the decoder catches up.
+## observed_position_ms remains the last confirmed playback clock.
+func display_position_ms() -> int:
+	return target_ms if pending or in_flight > 0 else observed_position_ms
+
 func close() -> void:
 	reject()
 	observed_position_ms = 0
@@ -50,4 +55,5 @@ func close() -> void:
 func snapshot() -> Dictionary:
 	return {"request_id": sequence, "state": "queued" if pending else ("awaiting_first_frame" if in_flight > 0 else "idle"), \
 		"target_ms": target_ms, "observed_position_ms": observed_position_ms, "duration_ms": duration_ms, \
+		"display_position_ms": display_position_ms(), \
 		"capacity": 1, "seek_method": "Media3_decoder_and_Surface_replacement", "source_frame_pts_verified": false}

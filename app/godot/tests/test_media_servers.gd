@@ -16,6 +16,8 @@ class Platform extends Object:
 		next += 1; requests[next] = JSON.parse_string(json); return next
 	func media_server_cancel(id: int) -> void: cancelled.append(id)
 	func media_server_accounts() -> void: setups += 1
+	func accounts_changed() -> void:
+		media_list.emit(0, JSON.stringify({"source": "medialib", "state": "accounts_changed"}))
 	func answer(id: int, data: Dictionary) -> void:
 		var req: Dictionary = requests[id]
 		data.merge({"generation": req.generation, "server_id": req.server_id, "source": "medialib", "state": "ready"})
@@ -121,8 +123,54 @@ func _run() -> void:
 	b.choose(b.rows()[1]); check(b.view == "remove_servers", "cancel deletion")
 	b.choose(b.rows()[0]); b.choose(b.rows()[0])
 	check(platform.requests[platform.next].action == "remove" and platform.requests[platform.next].server_id == "srv", "delete correct server")
+	var removing_request: int = platform.next
+	platform.accounts_changed()
+	check(b.pending.has(removing_request), "store notification preserves VR removal completion and cleanup")
 	platform.answer(platform.next, {})
 	check(b.view == "servers" and platform.requests[platform.next].action == "servers", "deletion refreshes server list")
+	platform.answer(platform.next, {"servers": []})
+	b.action(Browser.ACTION + 1)
+	var before_save: int = platform.next
+	platform.accounts_changed() # Saved in the native window, without an Android resume.
+	check(platform.next == before_save + 1 and platform.requests[platform.next].action == "servers", "saving without resume reloads servers")
+	var emby := {"id": "emby-new", "name": "Emby NAS", "provider": "emby"}
+	platform.answer(platform.next, {"servers": [emby]})
+	check(menu.rows.size() == 1 and menu.rows[0].server_account.id == "emby-new", "new Emby has a visible entry without reopening the menu")
+	check(menu._buttons.any(func(button): return button.target == Browser.ACTION + 14 and button.enabled), "server edit is visible beside add and delete")
+	var setups_before: int = platform.setups
+	b.action(Browser.ACTION + 14)
+	check(platform.setups == setups_before + 1 and b.setup, "explicit server edit opens account management")
+	menu._choose(menu.rows[0])
+	check(platform.requests[platform.next].action == "browse" and platform.requests[platform.next].server_id == "emby-new", "new Emby entry opens its library")
+	b.action(Browser.ACTION + 1)
+	platform.android_lifecycle.emit("resume") # Some window transitions resume before save.
+	var before_change: int = platform.next
+	platform.accounts_changed()
+	check(before_change in platform.cancelled, "account change cancels a pre-save list request")
+	platform.answer(before_change, {"servers": []})
+	check(b.busy, "stale pre-save result cannot finish the replacement request")
+	emby.name = "Renamed Emby"
+	platform.answer(platform.next, {"servers": [emby]})
+	check(menu.rows.size() == 1 and menu.rows[0].title == "Renamed Emby", "save after early resume still refreshes the entry")
+	platform.accounts_changed()
+	platform.answer(platform.next, {"servers": []})
+	check(menu.rows.is_empty(), "native removal clears the old entry without resume")
+	check(menu._buttons.any(func(button): return button.target == Browser.ACTION + 12), "empty server list offers a refresh button")
+	b.action(Browser.ACTION + 12)
+	check(platform.requests[platform.next].action == "servers" and b.view == "servers", "server refresh requests accounts rather than scenes")
+	var refreshing: int = platform.next
+	b.action(Browser.ACTION + 12)
+	check(platform.next == refreshing, "busy server refresh cannot enqueue duplicates")
+	platform.answer(refreshing, {"state": "error", "error": "Server unavailable"})
+	b.action(Browser.ACTION + 12)
+	check(platform.next == refreshing + 1, "failed list refresh can be retried")
+	menu._activate(Menu.NAV_BASE + Menu.Section.RECENT)
+	var outside: int = platform.next
+	var outside_status: String = menu.status
+	platform.accounts_changed()
+	check(platform.next == outside and menu.section == Menu.Section.RECENT and menu.status == outside_status, "account notification leaves other sections alone")
+	menu._activate(Menu.NAV_BASE + Menu.Section.MEDIA_SERVER)
+	check(platform.requests[platform.next].action == "servers", "returning to servers reads the latest accounts")
 	menu.free(); platform.free()
 	for failure in failures: push_error(failure)
 	print("media server checks=%d failures=%d" % [checks, failures.size()])

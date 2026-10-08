@@ -58,6 +58,9 @@ internal class RvmVideoProbe(
     fun stats(): Map<String, Any> = mapOf("rvm_timeline" to timeline.json(), "rvm_process_ms_avg" to processMs, "rvm_drain_ms_avg" to drainMs,
         "rvm_idle_ms_avg" to idleMs, "rvm_pending_replaced" to skipped)
 
+    /** Do not consume the paused source's only frame while the runtime is still preparing. */
+    fun isReady(): Boolean = synchronized(lock) { !closed && runtime != null }
+
     fun start() {
         // Queue behind a running warmup compile first (it fills the cache), then build the runtime
         // on the inference worker that uses it. Built on the prepare thread, it never became ready.

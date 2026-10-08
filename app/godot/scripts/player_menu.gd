@@ -3,6 +3,7 @@ extends "res://scripts/ray_menu.gd"
 signal action_requested(operation: String)
 signal recent_requested
 signal seek_requested(position_ms: int)
+signal bookmark_requested(operation: String, marker_id: String, scope: String)
 signal volume_requested(volume: float, muted: bool)
 signal subtitle_requested(track_id: int)
 signal depth_strength_requested(strength: float)
@@ -11,6 +12,8 @@ signal adjustment_committed
 signal depth_strength_committed
 
 const SEEK := 200
+const BookmarkMenu := preload("res://scripts/bookmark_menu.gd")
+var bookmarks := BookmarkMenu.new(self)
 const MODE := 120
 const SELECTED := Color(0.16, 0.31, 0.27)
 const MODE_PROJECTION := 130
@@ -37,12 +40,14 @@ const SUBTITLE_ROWS := 3
 ## lives in the library's Settings: this panel keeps only what neither has.
 const TABS := ["Playback", "Settings", "Info"]
 const OPERATIONS := [
-	["recent", "seek_back", "play", "seek_forward", "alpha", "projection", "stereo", "stop", "recenter", "mute", "subtitles",
+	["recent", "previous_video", "play", "next_video", "alpha", "projection", "stereo", "stop", "recenter", "mute", "subtitles",
 		"clone_voice", "depth"],
-	["audio", "depth_strength", "loop", "screen_curve", "subtitle_distance", "color_grade"],
+	["audio", "depth_strength", "screen_distance", "screen_curve", "subtitle_distance", "color_grade", "loop"],
 	["capabilities"]]
-const HEADINGS := ["Audio track", "3D depth", "Loop", "Screen curve", "Subtitle distance", "Color grading"]
-const SETTING_ICONS := ["audio", "depth", "loop", "screen", "subtitle", "settings"]
+const HEADINGS := ["Audio track", "3D depth", "Screen distance", "Screen curve", "Subtitle distance", "Color grading", "Loop"]
+const SETTING_ICONS := ["audio", "depth", "screen", "screen", "subtitle", "settings", "loop"]
+const Surface := preload("res://scripts/media_surface.gd")
+const SCREEN_DISTANCES := [1.0, 2.0, 3.0, 5.0, 8.0]
 ## Flat screen curve steps (the video's CURVES) and their names.
 const CURVE_NAMES := ["Off", "Slight", "Medium", "Full"]
 
@@ -99,6 +104,7 @@ func _close_depth_slider() -> void:
 	_depth_open = false
 
 func dismiss() -> void:
+	bookmarks.reset()
 	_seek_hand = ""
 	_seek_preview = -1
 	_finish_adjustment()
@@ -109,6 +115,7 @@ func dismiss() -> void:
 	super.dismiss()
 
 func _reset_navigation() -> void:
+	bookmarks.reset()
 	_seek_hand = ""
 	_seek_preview = -1
 	_finish_adjustment()
@@ -138,6 +145,13 @@ func refresh_values() -> void:
 		refresh()
 		return
 	for button in _buttons:
+		if button.target == BookmarkMenu.ADD:
+			button.enabled = _state.get("bookmark_ready", false) and _seek_hand.is_empty()
+			button.node.get_child(1).material_override.albedo_color = button.foreground if button.enabled else MUTED
+			continue
+		if button.target >= BookmarkMenu.GROUP and button.target < BookmarkMenu.GROUP + 1000:
+			button.enabled = _state.get("bookmark_seekable", false)
+			continue
 		if button.target == SEEK:
 			button.enabled = _can_seek()
 			continue
@@ -208,10 +222,10 @@ func _draw() -> void:
 	_update_highlights()
 
 ## While watching, laid out like common VR players: a small translucent bar (title, then
-## sound and subtitles | -10 s, play, +10 s | Alpha, 2D -> 3D, video mode, settings, then the timeline),
+## sound and subtitles | previous, play, next | Alpha, 2D -> 3D, video mode, settings, then the timeline),
 ## round actions floating above it, icons only with their names on hover.
 func _draw_bar() -> void:
-	_set_backdrop(Vector2(1.16, 0.27), Vector2(0, 0))
+	_set_backdrop(Vector2(1.16, 0.34), Vector2(0, -0.025))
 	_backdrop.material_override.set_shader_parameter("surface_color", Color(PANEL, 0.86))
 	_backdrop.material_override.set_shader_parameter("corner_radius", 0.05)
 	_title = _label(_fit_title(str(_state.get("title", "")) if _state.get("has_video", false) else "", "", 0.9, 15), Vector3(0, 0.1, 0.004), 15)
@@ -222,10 +236,10 @@ func _draw_bar() -> void:
 	_bar_drawn = _bar_key()
 	if _state.get("clone_voice", false):
 		_glyph(111, "voice", Vector2(-0.3, row), 0.075, _enabled("clone_voice"), I18n.t("Dubbing"))
-	_glyph(101, "back", Vector2(-0.13, row), 0.08, _enabled("seek_back"), "-10 s")
+	_glyph(101, "previous_video", Vector2(-0.13, row), 0.08, _enabled("previous_video"), I18n.t("Previous video"))
 	_round(102, "pause" if _pausable() else "play", Vector2(0, row), 0.095, _enabled("play"), true,
 		I18n.t("Pause" if _pausable() else "Play"))
-	_glyph(103, "forward", Vector2(0.13, row), 0.08, _enabled("seek_forward"), "+10 s")
+	_glyph(103, "next_video", Vector2(0.13, row), 0.08, _enabled("next_video"), I18n.t("Next video"))
 	# Both effects stay directly on the bar; unsupported source modes dim their buttons.
 	_glyph(104, "alpha", Vector2(0.23, row), 0.075, _enabled("alpha"), I18n.t("Passthrough"))
 	_glyph(112, "depth", Vector2(0.32, row), 0.075, _enabled("depth"), I18n.t("Auto 3D"))
@@ -236,7 +250,8 @@ func _draw_bar() -> void:
 	_round(107, "close", Vector2(-0.14, 0.215), 0.08, _enabled("stop"), false, I18n.t("Close video"))
 	_round(100, "folder", Vector2(0, 0.215), 0.08, true, false, I18n.t("Library"))
 	_round(108, "recenter", Vector2(0.14, 0.215), 0.08, true, false, I18n.t("Recenter"))
-	_place_device_status(Vector2(0, -0.175))
+	_place_device_status(Vector2(0, -0.245))
+	bookmarks.draw()
 	if _mode_open:
 		_draw_modes()
 	if _volume_open:
@@ -285,6 +300,9 @@ func _subtitle_row(target: int, id: int, text: String, y: float) -> void:
 		_icon("check", Vector3(0.414, 0, 0.004), 0.029, ACCENT, button.node)
 
 func stick_scroll(y: float, delta: float) -> void:
+	if visible and bookmarks.opened:
+		bookmarks.stick_scroll(y, delta)
+		return
 	if not visible or not _subtitle_open or not is_finite(y) or absf(y) < 0.4:
 		_subtitle_scroll = 0.0
 		return
@@ -422,15 +440,16 @@ func _plane_point(origin: Vector3, direction: Vector3) -> Variant:
 	return start + delta * (-start.z / delta.z)
 
 func press_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> bool:
+	if not bookmarks.capture.is_empty(): return true
 	for owner in [_adjust_hand, _depth_hand, _volume_hand, _seek_hand]:
 		if not owner.is_empty() and owner != hand: return false
 	update_pointer(hand, origin, direction, tracked)
 	var hit := ray_hit(origin, direction) if tracked else {}
+	if not hit.is_empty() and bookmarks.press(hand, hit): return true
 	if not hit.is_empty() and int(hit.target) == SEEK and _can_seek():
 		_seek_hand = hand
 		_seek_start = _seek_at(float(hit.point.x))
 		_seek_preview = _seek_start
-		seek_requested.emit(_seek_start)
 		return true
 	if not hit.is_empty() and _adjust_rows.has(int(hit.target)):
 		if not _adjust_hand.is_empty() and _adjust_hand != hand: return false
@@ -453,6 +472,7 @@ func press_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: b
 	return super(hand, origin, direction, tracked)
 
 func cancel_pointer(hand: String) -> void:
+	if bookmarks.capture.get("hand", "") == hand: bookmarks.cancel()
 	if hand == _seek_hand:
 		_seek_hand = ""
 		_seek_preview = -1
@@ -461,6 +481,7 @@ func cancel_pointer(hand: String) -> void:
 
 func update_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> void:
 	super(hand, origin, direction, tracked)
+	bookmarks.update(hand, origin, direction, tracked)
 	if hand == _seek_hand:
 		if not tracked or not visible or not _can_seek():
 			_seek_hand = ""
@@ -488,11 +509,12 @@ func update_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: 
 		_set_volume_at(float(point.y))
 
 func release_pointer(hand: String, _origin: Vector3, _direction: Vector3, _tracked: bool) -> void:
+	bookmarks.release(hand, _origin, _direction, _tracked)
 	if hand == _seek_hand:
 		var target := _seek_preview
 		_seek_hand = ""
 		_seek_preview = -1
-		if _tracked and visible and _can_seek() and abs(target - _seek_start) > 50: seek_requested.emit(target)
+		if _tracked and visible and _can_seek() and target >= 0: seek_requested.emit(target)
 	if hand == _adjust_hand: _finish_adjustment()
 	if hand == _depth_hand: _finish_depth_drag()
 	if hand == _volume_hand:
@@ -500,7 +522,7 @@ func release_pointer(hand: String, _origin: Vector3, _direction: Vector3, _track
 
 func _bar_key() -> String:
 	return str([_state.get("clone_voice", false), _state.get("geometry", 0), _state.get("has_video", false),
-		_state.get("source_uri", ""), _subtitle_tracks(), _state.get("subtitle_track", 0)])
+		_state.get("source_uri", ""), _subtitle_tracks(), _state.get("subtitle_track", 0), bookmarks.key()])
 
 func _seek_at(x: float) -> int:
 	return roundi(clampf((x + BAR_SEEK / 2) / BAR_SEEK, 0.0, 1.0) * int(_state.get("duration_ms", 0)))
@@ -626,10 +648,12 @@ func _activate_hit(hit: Dictionary) -> void:
 		super._activate_hit(hit)
 
 func _activate(target: int) -> void:
+	bookmarks.opened = false
 	if not _adjustment.is_empty():
 		_activate_adjustment(target)
 		return
-	if section == 1 and target >= 100 and target < 100 + OPERATIONS[1].size() and OPERATIONS[1][target - 100] in ["subtitle_distance", "color_grade"]:
+	if section == 1 and target >= 100 and target < 100 + OPERATIONS[1].size() and OPERATIONS[1][target - 100] in ["screen_distance", "subtitle_distance", "color_grade"]:
+		if not _enabled(OPERATIONS[1][target - 100]): return
 		_adjustment = OPERATIONS[1][target - 100]
 		_grade_page = 0
 		refresh()
@@ -735,7 +759,8 @@ func _update_highlights() -> void:
 func _enabled(operation: String) -> bool:
 	var has_video: bool = _state.get("has_video", false)
 	match operation:
-		"play", "seek_back", "seek_forward", "loop", "stop": return has_video
+		"play", "loop", "stop": return has_video
+		"previous_video", "next_video": return has_video and _state.get("has_" + operation, false)
 		"alpha": return has_video and int(_state.get("geometry", 0)) in [1, 2]
 		"eyes": return _state.get("stereo", false)
 		"volume_down", "volume_up", "mute": return has_video and _state.get("audio_available", false)
@@ -745,7 +770,7 @@ func _enabled(operation: String) -> bool:
 		"depth_strength": return _can_depth()
 		"subtitles": return has_video
 		"capabilities": return _state.get("capabilities_available", false)
-		"screen_curve": return has_video and int(_state.get("geometry", 0)) == 0
+		"screen_curve", "screen_distance": return has_video and int(_state.get("geometry", 0)) == 0
 	return true
 
 func _pausable() -> bool:
@@ -761,8 +786,8 @@ func _caption_text(operation: String) -> String:
 		"recent": return "Library"
 		"play": return "Pause" if _pausable() else "Play"
 		"alpha": return "Passthrough"
-		"seek_back": return "-10s"
-		"seek_forward": return "+10s"
+		"previous_video": return "Previous video"
+		"next_video": return "Next video"
 		"loop": return "On" if _state.get("loop", false) else "Off"
 		"stop": return "Close video"
 		"stereo": return ("TB" if _state.get("top_bottom", false) else "SBS") if _state.get("stereo", false) else "2D"
@@ -779,6 +804,7 @@ func _caption_text(operation: String) -> String:
 		"subtitles": return "Subtitles"
 		"capabilities": return "Refresh device info"
 		"subtitle_distance": return "%.1f m" % float(_state.get("subtitle_distance", 5.0))
+		"screen_distance": return "%.1f m" % float(_state.get("screen_distance", Surface.SCREEN_DISTANCE))
 		"color_grade": return str(_state.get("color_grade", {}).get("preset", "Original"))
 		"screen_curve": return CURVE_NAMES[clampi(roundi(float(_state.get("screen_curve", 0.0)) / 0.35), 0, 3)]
 	return operation
@@ -825,9 +851,13 @@ func _draw_adjustments() -> void:
 	_set_backdrop(Vector2(1.55, 1.22))
 	_button(400, "", Vector2(-0.66, 0.51), Vector2(0.09, 0.065), true, "up")
 	_button(CLOSE, "", Vector2(0.66, 0.51), Vector2(0.09, 0.065), true, "close")
-	_label(I18n.t("Subtitle distance" if _adjustment == "subtitle_distance" else "Color grading"), Vector3(0, 0.51, 0.004), 24)
+	_label(I18n.t({"screen_distance": "Screen distance", "subtitle_distance": "Subtitle distance", "color_grade": "Color grading"}[_adjustment]), Vector3(0, 0.51, 0.004), 24)
 	_place_device_status(Vector2(0, -0.66))
-	if _adjustment == "subtitle_distance":
+	if _adjustment == "screen_distance":
+		_adjustment_row(450, "screen_distance", "Screen distance", Vector3(Surface.DISTANCE_LIMITS.x, Surface.DISTANCE_LIMITS.y, 0.1), 0.17)
+		for i in SCREEN_DISTANCES.size():
+			_button(420 + i, "%.1f m" % SCREEN_DISTANCES[i], Vector2(-0.56 + i * 0.28, -0.05), Vector2(0.25, 0.075))
+	elif _adjustment == "subtitle_distance":
 		_adjustment_row(450, "subtitle_distance", "Subtitle distance", Vector3(5, 20, 0.5), 0.17)
 		for i in 5:
 			_button(420 + i, "%.1f m" % [5, 7.5, 10, 15, 20][i], Vector2(-0.56 + i * 0.28, -0.05), Vector2(0.25, 0.075))
@@ -861,9 +891,10 @@ func _adjustment_row(target: int, key: String, title: String, span: Vector3, y: 
 func _refresh_adjustments() -> void:
 	var values: Dictionary = _state.get("grade_values", Grade.DEFAULTS)
 	for row in _adjust_rows.values():
-		var value := float(_state.get("subtitle_distance", 5.0)) if row.key == "subtitle_distance" else float(values.get(row.key, Grade.DEFAULTS[row.key]))
+		var distance: bool = row.key in ["subtitle_distance", "screen_distance"]
+		var value := float(_state.get(row.key, 5.0 if row.key == "subtitle_distance" else Surface.SCREEN_DISTANCE)) if distance else float(values.get(row.key, Grade.DEFAULTS[row.key]))
 		var fraction := clampf((value - row.span.x) / (row.span.y - row.span.x), 0, 1)
-		row.label.text = "%.1f m" % value if row.key == "subtitle_distance" else ("%d K" % value if row.key == "temperature" else ("%+.2f EV" % value if row.key == "exposure" else "%.3f" % value))
+		row.label.text = "%.1f m" % value if distance else ("%d K" % value if row.key == "temperature" else ("%+.2f EV" % value if row.key == "exposure" else "%.3f" % value))
 		row.fill.visible = fraction > 0
 		row.fill.mesh.size.x = maxf(0.001, fraction * 0.6)
 		row.fill.position.x = 0.03 + fraction * 0.3
@@ -887,6 +918,9 @@ func _activate_adjustment(target: int) -> void:
 		return
 	if target == 400:
 		_adjustment = ""
+	elif _adjustment == "screen_distance" and target >= 420 and target < 425:
+		adjustment_requested.emit("screen_distance", SCREEN_DISTANCES[target - 420])
+		adjustment_committed.emit()
 	elif _adjustment == "subtitle_distance" and target >= 420 and target < 425:
 		adjustment_requested.emit("subtitle_distance", [5.0, 7.5, 10.0, 15.0, 20.0][target - 420])
 		adjustment_committed.emit()

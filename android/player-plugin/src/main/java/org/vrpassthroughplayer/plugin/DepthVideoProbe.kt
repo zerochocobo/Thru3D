@@ -147,13 +147,9 @@ internal class DepthVideoProbe(
             synchronized(lock) {
                 // A seek while this ran: its scene is gone.
                 if (!closed && frameId <= lastSubmitted && (latestFrame < 0 || frameId >= latestFrame)) {
-                    // Second plane: the source frame's luminance, so the bridge can tell where the
-                    // picture has moved since this map (its stale-edge attenuation).
-                    val luma = ByteBuffer.allocateDirect(near.capacity()).order(ByteOrder.LITTLE_ENDIAN)
-                    val plane = near.capacity() / 4
-                    for (i in 0 until plane)
-                        luma.putFloat(i * 4, (rgb.getFloat(i * 4) + rgb.getFloat((plane + i) * 4) + rgb.getFloat((2 * plane + i) * 4)) / 3f)
-                    latest = near to luma; latestFrame = frameId; inferred++
+                    val copy = ByteBuffer.allocateDirect(near.capacity()).order(ByteOrder.LITTLE_ENDIAN)
+                        .put(near.duplicate().apply { clear() }).apply { clear() }
+                    latest = near to copy; latestFrame = frameId; inferred++
                 }
             }
         } finally {

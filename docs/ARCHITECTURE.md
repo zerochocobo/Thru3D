@@ -6,6 +6,8 @@
 
 Display geometry separates flat/180°/360° projection from mono/SBS layout and eye order. Menu pages, per-file preferences and localization are independent of the Android media backend. The desktop path is a development preview and mock backend, not an equivalent Android/XR playback implementation.
 
+Version 0.2.1 adds persistent timestamp-only bookmarks (`bookmark_store`, `bookmark_menu`, `timeline_markers`), paged recent-file previews, cloud account/pagination handling, and input visuals. `input_visuals.gd` uses runtime render models when available and licensed glTF hand fallbacks. Seek keeps a presented frame until the target frame arrives. No ratings, stars or bookmark editing are exposed.
+
 ## Android boundary
 
 `QuestPlayerPlugin.kt` exposes Godot-callable methods and owns Android media selection, libraries and lifecycle. Document grants, file descriptors and HTTP/SMB/cloud sources are managed in Kotlin. Authentication data stays in application-private storage; no account credentials belong in source control.

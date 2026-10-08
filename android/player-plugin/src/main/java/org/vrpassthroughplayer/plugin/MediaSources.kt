@@ -18,14 +18,15 @@ internal class MediaSources(
     private val ids = AtomicInteger()
     private val network = Executors.newSingleThreadExecutor { Thread(it, "QuestMediaNetwork") }
     private val cloudNetwork = Executors.newSingleThreadExecutor { Thread(it, "QuestCloudNetwork") }
+    private val cloudBrowseRequests = CloudBrowseRequests()
     private val local = LocalVideoLibrary(host, emit)
     private val dlnaServers = HashMap<String, DlnaClient.Server>() // network worker only
     @Volatile private var server: LocalStreamServer? = null
     private val smb by lazy { SmbLibrary(context() ?: error("Activity unavailable")) { streams() } }
-    private val mediaServers = MediaServerLibrary(::context, ::streams, ::nextId, emit)
+    private val mediaServers = MediaServerLibrary(::context, ::streams, ::nextId, emit = emit)
     fun serverRequest(json: String): Int = mediaServers.request(json)
     fun serverCancel(id: Int) = mediaServers.cancel(id)
-    fun serverAccounts() { host()?.let { it.startActivity(android.content.Intent(it, MediaServersActivity::class.java)) } }
+    fun serverAccounts() { host()?.let { NativePanelActivity.open(it, MediaServersActivity::class.java) } }
     fun releaseMediaStream(uri: String) {
         mediaServers.release(uri)
         server?.revoke(uri)
@@ -44,7 +45,11 @@ internal class MediaSources(
     fun onPermissionResult(requestCode: Int, granted: Boolean) = local.onPermissionResult(requestCode, granted)
 
     @Volatile private var stopped = false
+    private val cloudAccountChanged: () -> Unit = {
+        if (!stopped) emit(0, JSONObject().put("source", "cloud").put("state", "accounts_changed").toString())
+    }
     init {
+        CloudAccountChanges.subscribe(cloudAccountChanged)
         DlnaClient.log = { android.util.Log.i("QuestDlna", it) }
         cloudNetwork.execute {
             if (!stopped) runCatching { context()?.let { CloudWebDav.restore(it) } }
@@ -83,13 +88,29 @@ internal class MediaSources(
         JSONObject().put("server_id", serverId).put("path", path).put("entries", smb.browse(serverId, path))
     }
 
-    fun cloudBrowse(path: String, refresh: Boolean): Int = run("cloud") {
+    fun cloudBrowse(path: String, refresh: Boolean, offset: Int = 0): Int {
+        val id = nextId()
+        cloudBrowseRequests.submit(id, { cancellation ->
+            val result = try {
+                CloudLibrary.start(context() ?: error("Activity unavailable"))
+                CloudLibrary.browse(path, refresh, offset, cancellation).put("state", "ready")
+            } catch (error: Exception) {
+                JSONObject().put("state", "error").put("error", error.message ?: "Cloud connection failed")
+            }
+            result.put("source", "cloud").put("path", path).put("offset", offset).toString()
+        }, emit)
+        return id
+    }
+    fun cloudCancel(id: Int) = cloudBrowseRequests.cancel(id)
+
+    fun cloudRemove(id: String): Int = run("cloud") {
         CloudLibrary.start(context() ?: error("Activity unavailable"))
-        CloudLibrary.browse(path, refresh)
+        CloudLibrary.remove(id)
+        JSONObject()
     }
 
     fun cloudAccounts() {
-        host()?.let { it.startActivity(android.content.Intent(it, CloudAccountsActivity::class.java)) }
+        host()?.let { NativePanelActivity.open(it, CloudAccountsActivity::class.java) }
     }
 
     /** MPV-playable location for a library URI; blocks (SMB connects). Worker threads only. */
@@ -137,7 +158,9 @@ internal class MediaSources(
 
     fun close() {
         stopped = true
+        CloudAccountChanges.unsubscribe(cloudAccountChanged)
         mediaServers.close()
+        cloudBrowseRequests.close()
         network.shutdownNow(); cloudNetwork.shutdownNow(); local.close()
         CloudLibrary.stopStreams()
         CloudWebDav.stop()

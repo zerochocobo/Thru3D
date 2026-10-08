@@ -11,7 +11,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Native text entry keeps server secrets out of Godot and permits the system paste menu. */
-class MediaServersActivity : Activity() {
+class MediaServersActivity : NativePanelActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var body: LinearLayout
     private lateinit var status: TextView
@@ -21,7 +21,9 @@ class MediaServersActivity : Activity() {
     private var revision = 0
     private fun tr(en: String, zh: String) = UiLanguage.tr(this, en, zh)
     override fun onCreate(state: Bundle?) {
-        super.onCreate(state); window.addFlags(WindowManager.LayoutParams.FLAG_SECURE); accounts()
+        super.onCreate(state)
+        if (isFinishing) return
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE); accounts()
     }
     private fun page(title: String) {
         discovery?.close(); discovery = null

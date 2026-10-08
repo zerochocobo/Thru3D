@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Uri, [int]$CueMs = 37500, [ValidateRange(1,8)][int]$Switches = 2, [string]$Serial = '2G0YC5ZF7V0664', [string]$BuildManifest = '')
+param([Parameter(Mandatory)][string]$Uri, [int]$CueMs = 37500, [ValidateRange(1,8)][int]$Switches = 2, [Parameter(Mandatory=$true)][string]$Serial, [string]$BuildManifest = '')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
 . "$workspace\tools\environment\Activate-QuestEnvironment.ps1"

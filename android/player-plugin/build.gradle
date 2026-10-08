@@ -63,7 +63,7 @@ dependencies {
     compileOnly files(godotApi.get())
     implementation 'androidx.media3:media3-exoplayer:1.10.1'
     // SMB2/3 client with share enumeration (LGPL-2.1); the APK is already GPL through MPV.
-    implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
+    implementation 'org.codelibs:jcifs:3.0.4'
     testImplementation 'junit:junit:4.13.2'
     // JVM tests exercise org.json; android.jar only provides stubs.
     testImplementation 'org.json:json:20240303'

@@ -198,6 +198,7 @@ func _accept(result: Dictionary, job: Dictionary) -> void:
 		fisheye_fov = int(mode_lock.fisheye_fov)
 	reset_view()
 	material.set_shader_parameter("photo_texture", _texture)
+	_detail_material.set_shader_parameter("sharpness", sharpness)
 	_detail_material.set_shader_parameter("photo_texture", _texture)
 	_apply_geometry()
 	panel.visible = true
@@ -427,6 +428,7 @@ func close_image(notify: bool = true) -> void:
 	_request = 0; _display_request = 0; _next_decode = {}
 	_texture = null; _depth_texture = null; _depth_busy = false; depth_requested = false; depth_enabled = false
 	material.set_shader_parameter("photo_texture", null); material.set_shader_parameter("depth_texture", null)
+	_detail_material.set_shader_parameter("sharpness", sharpness)
 	_detail_material.set_shader_parameter("photo_texture", null); _detail_material.set_shader_parameter("depth_texture", null)
 	panel.visible = false; _detail.visible = false; loading = false; inspect = false
 	local_uri = ""; display_name = ""; error = ""; index = -1; pending_index = -1

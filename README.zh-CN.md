@@ -4,6 +4,8 @@
 
 面向 Meta Quest 和 PICO 的独立 Android VR/MR 媒体播放器。使用 Godot OpenXR 构建界面，Kotlin 管理媒体与授权，libmpv/FFmpeg 解码，MNN OpenCL 执行人物抠像与深度推理。
 
+当前源码版本：**0.2.1**，Android versionCode **4**；另提供实验性的标准 OpenXR Android 导出目标。
+
 ## 功能
 
 - 视频和照片：平面、180°、360°，单目和左右立体。
@@ -12,6 +14,8 @@
 - 本地文件、SMB、WebDAV、DLNA、媒体服务器及原生 115/百度适配。
 - 音轨、字幕、播放控制、逐文件观看偏好。
 - 手柄射线/扳机选择、手部交互及中英日界面。
+- 持久化时间点书签、最近播放源帧预览、分页浏览。
+- 手部/手柄可视化、锐度及平面屏幕调整。
 
 ## 公开范围与构建条件
 
@@ -34,9 +38,10 @@ $env:THRU3D_TOOL_ROOT = Join-Path $HOME '.cache/thru3d-toolchain'
 ./tools/Import-ModelAssets.ps1 -FromDirectory ./external-model-assets
 ./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor Quest
 ./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor Pico
+./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor OpenXR
 ```
 
-输出在忽略的 `artifacts` 目录。自行生成的签名不一定可以覆盖已有发行版。Quest/PICO 分别使用对应厂商导出预设；PICO 打包检查不等同于 PICO 真机验证。
+输出在忽略的 `artifacts` 目录。自行生成的签名不一定可以覆盖已有发行版。Quest/PICO 分别使用对应厂商导出预设；标准 OpenXR 目标要求设备具备兼容运行时，PICO/通用打包检查不等同于真机验证。运行所需的 MIT 手部 glTF 网格随源码保留，AI 权重不入 Git。
 
 ## 目录与操作
 

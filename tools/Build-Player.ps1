@@ -1,7 +1,7 @@
 ﻿param([string]$ToolRoot = $(if ($env:THRU3D_TOOL_ROOT) { $env:THRU3D_TOOL_ROOT } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cache\thru3d-toolchain' }),
     [ValidateSet('OfficialRelease','SourceFrame')][string]$MpvCandidate = 'SourceFrame',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.-]*\.apk$')][string]$ApkName = '',
-    [ValidateSet('Quest','Pico')][string]$XrVendor = 'Quest',
+    [ValidateSet('Quest','Pico','OpenXR')][string]$XrVendor = 'Quest',
     [ValidateSet('Debug','Release')][string]$BuildType = 'Debug',
     # Only to deploy while unrelated work-in-progress unit tests do not compile.
     [switch]$SkipUnitTests,
@@ -12,12 +12,27 @@
 $ErrorActionPreference = 'Stop'
 if (-not $ApkName) {
     $ApkName = if ($BuildType -eq 'Release') {
-        if ($XrVendor -eq 'Pico') { 'Thru3D-PICO4-release.apk' } else { 'Thru3D-Quest3-release.apk' }
+        switch ($XrVendor) {
+            'Pico' { 'Thru3D-PICO4-release.apk' }
+            'OpenXR' { 'Thru3D-OpenXR-release.apk' }
+            default { 'Thru3D-Quest3-release.apk' }
+        }
     } else {
-        if ($XrVendor -eq 'Pico') { 'pico4-player-debug.apk' } else { 'quest3-player-debug.apk' }
+        switch ($XrVendor) {
+            'Pico' { 'pico4-player-debug.apk' }
+            'OpenXR' { 'openxr-player-debug.apk' }
+            default { 'quest3-player-debug.apk' }
+        }
     }
 }
-$exportPreset = if ($XrVendor -eq 'Pico') { 'PICO 4' } else { 'Quest 3' }
+$exportPreset = switch ($XrVendor) {
+    'Pico' { 'PICO 4' }
+    'OpenXR' { 'OpenXR (Experimental)' }
+    default { 'Quest 3' }
+}
+if ($XrVendor -eq 'OpenXR') {
+    Write-Output 'Experimental standard OpenXR target: device runtime, full controller input and passthrough require device validation.'
+}
 $applicationId = 'com.wapok.thru3d'
 function Convert-HexString([byte[]]$Bytes) { -join ($Bytes | ForEach-Object { $_.ToString('X2') }) }
 $workspace = Split-Path -Parent $PSScriptRoot
@@ -27,7 +42,7 @@ $buildMutex = [Threading.Mutex]::new($false, 'Local\VRPassthroughPlayer-Build')
 $buildLockHeld = $false
 $originalExportPresets = $null
 $originalSigningEnvironment = @{}
-foreach ($key in @('GODOT_ANDROID_KEYSTORE_RELEASE_PATH','GODOT_ANDROID_KEYSTORE_RELEASE_USER','GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD')) {
+foreach ($key in @('GODOT_ANDROID_KEYSTORE_RELEASE_PATH','GODOT_ANDROID_KEYSTORE_RELEASE_USER','GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD','ORG_GRADLE_PROJECT_android.jetifier.ignorelist')) {
     $originalSigningEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
 $exportPresetsPath = Join-Path $workspace 'app\godot\export_presets.cfg'
@@ -40,6 +55,10 @@ try {
         catch [Threading.AbandonedMutexException] { $buildLockHeld = $true }
     }
 . "$PSScriptRoot\environment\Activate-QuestEnvironment.ps1" -ToolRoot $ToolRoot
+# Bouncy Castle contains newer-JDK multi-release entries. It has no Android support
+# library references to rewrite; old Jetifier must leave this pure Java jar alone.
+[Environment]::SetEnvironmentVariable('ORG_GRADLE_PROJECT_android.jetifier.ignorelist',
+    (@($originalSigningEnvironment['ORG_GRADLE_PROJECT_android.jetifier.ignorelist'], 'bcprov-jdk18on') | Where-Object { $_ }) -join ',', 'Process')
 if ($BuildType -eq 'Release') {
     if ($IncludeDiagnostics) { throw 'Distribution Release builds cannot include diagnostic models/media.' }
     & "$PSScriptRoot\environment\Prepare-ReleaseSigning.ps1" -ToolRoot $ToolRoot
@@ -99,7 +118,20 @@ if ($LASTEXITCODE -ne 0) { throw 'Godot import failed; inspect artifacts/logs/go
 if ((Get-Content (Join-Path $logDirectory 'godot-import.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Godot import reported errors.' }
 $apkPath = Join-Path $artifactDirectory $ApkName
 $exportArguments = @('--headless','--xr-mode','off','--path',$projectDirectory)
-if (-not (Test-Path -LiteralPath (Join-Path $projectDirectory 'android\build\build.gradle'))) { $exportArguments += '--install-android-build-template' }
+$androidBuildScript = Join-Path $projectDirectory 'android\build\build.gradle'
+if (-not (Test-Path -LiteralPath $androidBuildScript)) {
+    & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --install-android-build-template --editor --quit-after 600 2>&1 | Out-File (Join-Path $logDirectory 'android-template.log') -Encoding utf8
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $androidBuildScript)) { throw 'Android build template installation failed.' }
+}
+# These are desktop OSGi manifests in multi-release jars, not Android runtime code.
+# BC and jspecify both provide them; keep the dependency classes and license resources.
+$osgiExclusion = "        exclude 'META-INF/versions/*/OSGI-INF/MANIFEST.MF'"
+$androidBuildText = [IO.File]::ReadAllText($androidBuildScript)
+if (-not $androidBuildText.Contains($osgiExclusion)) {
+    if (-not $androidBuildText.Contains('    packagingOptions {')) { throw 'Godot Android packaging block changed.' }
+    $androidBuildText = $androidBuildText.Replace('    packagingOptions {', "    packagingOptions {`n$osgiExclusion")
+    [IO.File]::WriteAllText($androidBuildScript, $androidBuildText, [Text.UTF8Encoding]::new($false))
+}
 $exportArguments += @($(if ($BuildType -eq 'Release') { '--export-release' } else { '--export-debug' }),$exportPreset,$apkPath)
 & $env:GODOT_EXE @exportArguments 2>&1 | Out-File (Join-Path $logDirectory 'godot-export.log') -Encoding utf8
 $exportExitCode = $LASTEXITCODE
@@ -119,6 +151,18 @@ if ($LASTEXITCODE -ne 0) { throw 'APK alignment validation failed.' }
 & "$env:ANDROID_HOME\build-tools\36.1.0\aapt2.exe" dump xmltree $apkPath --file AndroidManifest.xml 2>&1 | Out-File (Join-Path $logDirectory 'apk-manifest.txt') -Encoding utf8
 if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
 $manifestText = Get-Content (Join-Path $logDirectory 'apk-manifest.txt') -Raw
+# Inspect the merged APK, not just the preset. Meta immersive apps target SDK 34;
+# the compile SDK may remain newer. Minimum SDK 32 excludes retired Quest 1 OSes.
+$androidSdk = @{}
+foreach ($sdkAttribute in @('minSdkVersion', 'targetSdkVersion')) {
+    $sdkMatch = [regex]::Match($manifestText, ('android:' + $sdkAttribute + '[^\r\n]*=\s*(0x[0-9a-fA-F]+|[0-9]+)\b'))
+    if (-not $sdkMatch.Success) { throw "APK manifest is missing an inspectable Android $sdkAttribute." }
+    $sdkLiteral = $sdkMatch.Groups[1].Value
+    $androidSdk[$sdkAttribute] = if ($sdkLiteral.StartsWith('0x')) { [Convert]::ToInt32($sdkLiteral.Substring(2), 16) } else { [int]$sdkLiteral }
+}
+if ($XrVendor -eq 'Quest' -and ($androidSdk.targetSdkVersion -ne 34 -or $androidSdk.minSdkVersion -ne 32)) {
+    throw "Meta Quest APK must use Android min SDK 32 / target SDK 34; actual: $($androidSdk.minSdkVersion) / $($androidSdk.targetSdkVersion)."
+}
 if ($BuildType -eq 'Release' -and ($manifestText -match 'android:debuggable[^\r\n]*=true' -or $manifestText -match 'DebugDiagnosticsReceiver|MpvDiagnosticActivity|LocalAccessTestProvider|DEBUG_RVM_STANDALONE')) {
     throw 'Distribution APK contains debugging or diagnostic entry points.'
 }
@@ -127,13 +171,27 @@ $headFeature = @($manifestLines | Select-String 'android\.hardware\.vr\.headtrac
 if ($headFeature.Count -ne 1) { throw 'Expected exactly one headtracking feature.' }
 $headFeatureIndex = $headFeature[0].LineNumber - 1
 $headFeatureBlock = $manifestLines[$headFeatureIndex..($headFeatureIndex + 3)] -join "`n"
-if ($headFeatureBlock -notmatch 'android:required[^\r\n]*=true') { throw 'Immersive Quest APK must require 6DoF headtracking hardware.' }
-$vendorManifest = if ($XrVendor -eq 'Pico') { @('handtracking', 'Hand_Tracking_HighFrequency', 'pvr.app.type', 'pxr.sdk.version_code') } else { @('com.oculus.feature.PASSTHROUGH', 'com.oculus.permission.HAND_TRACKING', 'oculus.software.handtracking') }
+if ($headFeatureBlock -notmatch 'android:required[^\r\n]*=true') { throw 'Immersive APK must require 6DoF headtracking hardware.' }
+$vendorManifest = @(switch ($XrVendor) {
+    'Pico' { @('handtracking', 'Hand_Tracking_HighFrequency', 'pvr.app.type', 'pxr.sdk.version_code') }
+    'Quest' { @('com.oculus.feature.PASSTHROUGH', 'com.oculus.permission.HAND_TRACKING', 'oculus.software.handtracking') }
+    'OpenXR' { @() }
+})
 foreach ($expected in (@('org.vrpassthroughplayer.plugin.QuestPlayerPlugin','org.khronos.openxr.intent.category.IMMERSIVE_HMD', $applicationId) + $vendorManifest)) {
     if (-not $manifestText.Contains($expected)) { throw "APK manifest is missing: $expected" }
 }
 if ($XrVendor -eq 'Pico' -and $manifestText.Contains('com.oculus.permission.HAND_TRACKING')) { throw 'PICO APK contains Meta hand tracking configuration.' }
 if ($XrVendor -eq 'Quest' -and $manifestText.Contains('pvr.app.type')) { throw 'Quest APK contains PICO VR configuration.' }
+if ($XrVendor -eq 'Quest') {
+    $devicesLine = @($manifestLines | Select-String 'com\.oculus\.supportedDevices')
+    if ($devicesLine.Count -ne 1) { throw 'Quest APK must declare supported devices exactly once.' }
+    $devicesIndex = $devicesLine[0].LineNumber - 1
+    $devicesBlock = $manifestLines[$devicesIndex..($devicesIndex + 1)] -join "`n"
+    if ($devicesBlock -notmatch '="quest2\|quest3\|quest3s"') { throw 'Quest APK must support Quest 2, Quest 3 and Quest 3S.' }
+}
+if ($XrVendor -eq 'OpenXR' -and ($manifestText.Contains('com.oculus.supportedDevices') -or $manifestText.Contains('com.oculus.permission.HAND_TRACKING') -or $manifestText.Contains('pvr.app.type'))) {
+    throw 'Standard OpenXR APK contains vendor-specific device/hand-tracking configuration.'
+}
 $apkArchive = [IO.Compression.ZipFile]::OpenRead($apkPath)
 try {
     $abis = @($apkArchive.Entries | Where-Object { $_.FullName -match '^lib/([^/]+)/.+\.so$' } | ForEach-Object { $_.FullName.Split('/')[1] } | Sort-Object -Unique)
@@ -318,6 +376,8 @@ $buildManifest = [ordered]@{
     xr_vendor = $XrVendor
     hand_tracking = 'OpenXR joints; pinch ray input; physical validation pending'
     app_version = $appVersion
+    android_min_sdk = $androidSdk.minSdkVersion
+    android_target_sdk = $androidSdk.targetSdkVersion
     build_type = $BuildType
     stage = 'MP04_MPV_shared_RVM_player_integration_development'
     engine = $engineVersion

@@ -29,7 +29,7 @@ func configure(target_viewport: Viewport, target_environment: Environment, inter
 		session_state = "desktop_preview"
 		status_changed.emit()
 		return true
-	if xr != null and not xr.is_initialized() and "render_target_size_multiplier" in xr:
+	if xr != null and "render_target_size_multiplier" in xr:
 		xr.render_target_size_multiplier = render_scale
 	if xr == null or (not xr.is_initialized() and not xr.initialize()):
 		error_code = "XR_INITIALIZATION_FAILED"
@@ -138,9 +138,12 @@ func capabilities() -> Dictionary:
 		"performance_levels": performance_levels,
 		"foveation_level": foveation_level,
 		"render_scale": render_scale,
+		"viewport_scaling_3d_scale": viewport.scaling_3d_scale if viewport else 1.0,
 		"captured_ticks_usec": Time.get_ticks_usec(),
 	}
 	if xr != null and xr.is_initialized() and not preview:
+		var target_size := xr.get_render_target_size()
+		report["render_target_size"] = [int(target_size.x), int(target_size.y)]
 		report["system_info"] = xr.get_system_info()
 		report["view_count"] = xr.get_view_count()
 		report["tracking_status"] = xr.get_tracking_status()
@@ -165,6 +168,8 @@ func capabilities() -> Dictionary:
 			report["eye_quaternions"].append([orientation.x, orientation.y, orientation.z, orientation.w])
 		report["supported_blend_modes"] = xr.get_supported_environment_blend_modes()
 		if xr is OpenXRInterface:
+			report["applied_render_scale"] = xr.render_target_size_multiplier
+			report["applied_foveation_level"] = xr.foveation_level
 			report["refresh_rates"] = xr.get_available_display_refresh_rates()
 			report["refresh_rate"] = xr.display_refresh_rate
 	if not preview and Engine.has_singleton("OpenXRFbPassthroughExtension"):

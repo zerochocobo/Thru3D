@@ -1,4 +1,4 @@
-param([string]$Serial = '2G0YC5ZF7V0664', [switch]$Rvm, [switch]$Controlled, [switch]$RvmVideo, [switch]$Mpv, [switch]$MpvGpu, [switch]$MpvSource, [switch]$WakeForTest,
+param([Parameter(Mandatory=$true)][string]$Serial, [switch]$Rvm, [switch]$Controlled, [switch]$RvmVideo, [switch]$Mpv, [switch]$MpvGpu, [switch]$MpvSource, [switch]$WakeForTest,
     [string]$ToolRoot = $(if ($env:THRU3D_TOOL_ROOT) { $env:THRU3D_TOOL_ROOT } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cache\thru3d-toolchain' }),
     [ValidateSet('c03_sbs_grid','c04_alpha_f180','c04_independent_alpha')]
     [string[]]$Fixtures = @('c03_sbs_grid','c04_alpha_f180','c04_independent_alpha'))

@@ -1,4 +1,4 @@
-param([string]$Serial='2G0YC5ZF7V0664',[switch]$Install)
+param([Parameter(Mandatory=$true)][string]$Serial,[switch]$Install)
 $ErrorActionPreference='Stop'
 $workspace=Split-Path -Parent $PSScriptRoot
 . "$PSScriptRoot/environment/Activate-QuestEnvironment.ps1"

@@ -191,6 +191,8 @@ struct Source final {
         // All property reads happen before taking the status lock.
         const auto codec = property(core, "video-codec"), hwdec = property(core, "hwdec-current");
         const auto position = property(core, "time-pos"), duration = property(core, "duration");
+        const auto seekable = property(core, "seekable"), partial = property(core, "partially-seekable");
+        const auto file_size = property(core, "file-size");
         const auto matrix = property(core, "video-params/colormatrix"), range = property(core, "video-params/colorlevels");
         const auto transfer = property(core, "video-params/gamma"), paused = property(core, "pause");
         const auto audio_codec = property(core, "audio-codec"), ao = property(core, "current-ao");
@@ -237,6 +239,7 @@ struct Source final {
         core_eof.store(eof == "yes" && !awaiting_seek_event && last_epoch.load() >= epoch_floor.load());
         const auto json = "{\"codec\":" + quote(codec) + ",\"hwdec_current\":" + quote(hwdec) +
             ",\"position_seconds\":" + quote(position) + ",\"duration_seconds\":" + quote(duration) +
+            ",\"seekable\":" + quote(seekable) + ",\"partially_seekable\":" + quote(partial) + ",\"file_size\":" + quote(file_size) +
             ",\"paused\":" + quote(paused) + ",\"color_matrix\":" + quote(matrix) +
             ",\"color_range\":" + quote(range) + ",\"color_transfer\":" + quote(transfer) +
             ",\"audio_codec\":" + quote(audio_codec) + ",\"audio_output\":" + quote(ao) +

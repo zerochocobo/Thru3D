@@ -5,6 +5,8 @@ $workspace = Split-Path -Parent $PSScriptRoot
 $projectDirectory = Join-Path $workspace 'app\godot'
 $logDirectory = Join-Path $workspace 'artifacts\logs'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_input_visuals.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'input-visuals-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'input-visuals-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Input model visibility regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_i18n.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'i18n-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'i18n-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'UI localization regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_hand_pointer.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'hand-pointer-host.log')
@@ -24,6 +26,8 @@ if ((Get-Content (Join-Path $logDirectory 'c05-host-regression.log') -Raw) -matc
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_mpv_end.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'mpv-end-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'MPV EOF host regression failed.' }
 if ((Get-Content (Join-Path $logDirectory 'mpv-end-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'MPV EOF host regression reported runtime errors.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_mpv_seek_hold.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'mpv-seek-hold-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'mpv-seek-hold-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'MPV seek hold regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_mpv_audio.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'mpv-audio-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'MPV audio host regression failed.' }
 if ((Get-Content (Join-Path $logDirectory 'mpv-audio-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'MPV audio host regression reported runtime errors.' }
@@ -55,8 +59,12 @@ if ((Get-Content (Join-Path $logDirectory 'thumbnails-host.log') -Raw) -match '(
 if ($LASTEXITCODE -ne 0) { throw 'Depth parallax render regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_library_menu.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'library-menu-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Library menu host regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_cloud_pagination.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'cloud-pagination-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'cloud-pagination-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Cloud pagination regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_media_servers.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'media-servers-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'media-servers-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Media server host regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_cloud_accounts.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'cloud-accounts-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'cloud-accounts-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Cloud account management regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_media_naming.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'media-naming-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Media naming host regression failed.' }
 # Alpha-packed fisheye files decoded by the MPV pair shader (desktop OpenGL).
@@ -71,6 +79,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Screen curve render regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_player_menu.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'player-menu-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Player menu host regression failed.' }
 if ((Get-Content (Join-Path $logDirectory 'player-menu-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Player menu host regression reported runtime errors.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_bookmarks.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'bookmarks-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'bookmarks-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Bookmark storage and pointer regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_flat_screen_controls.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'flat-screen-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'flat-screen-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Flat screen controls regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 2500 --script res://tests/test_photos.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photos-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photos-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo host regression failed.' }
 & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 2500 --script res://tests/render_photos.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photos-render.log')
@@ -124,3 +136,8 @@ if ($RenderPreview) {
     if ($pairReport.state -ne 'passed' -or $pairReport.samples.Count -ne 288 -or $pairReport.borrow_cycles -ne 3) { throw 'R03 pair render evidence incomplete.' }
     Write-Output "R03 native pair render: $env:QUEST_R03_PAIR_PATH"
 }
+
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_display_quality.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'display-quality-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'display-quality-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Display quality settings failed.' }
+& $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 1800 --script res://tests/render_sharpness.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'sharpness-render.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'sharpness-render.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Sharpness pixels failed.' }

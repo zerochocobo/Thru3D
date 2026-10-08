@@ -6,6 +6,7 @@ const Main := preload("res://scripts/main.gd")
 const Video := preload("res://scripts/mpv_video_display.gd")
 const Memory := preload("res://scripts/file_mode_memory.gd")
 const Catalog := preload("res://scripts/recent_files.gd")
+const Library := preload("res://scripts/library_menu.gd")
 var checks := 0
 var failures: Array[String] = []
 
@@ -37,6 +38,24 @@ class Host extends RefCounted:
 func check(value: bool, message: String) -> void:
 	checks += 1
 	if not value: failures.append(message)
+
+func _check_video_queue() -> void:
+	var library := Library.new()
+	library.rows = [{"uri": "smb://host/a.mp4", "title": "A", "kind": "video"},
+		{"uri": "smb://host/p.jpg", "title": "Photo", "kind": "image"},
+		{"folder": "subfolder", "title": "Folder"},
+		{"uri": "cloud://folder", "title": "Container", "container": true},
+		{"uri": "cloud://b.mp4", "title": "B", "kind": "video"}]
+	var queue := library.video_queue()
+	check(queue.map(func(item): return item.uri) == ["smb://host/a.mp4", "cloud://b.mp4"], "Video queue preserves browse order and excludes photos, folders and containers")
+	library.rows.reverse()
+	check(queue[0].uri == "smb://host/a.mp4", "Browsing later cannot reorder the captured playback queue")
+	library.section = Library.Section.MEDIA_SERVER
+	library.server_browser.entries = [{"uri": "medialib://server/scene/1", "title": "Scene", "basename": "movie_180_sbs.mp4"}]
+	queue = library.video_queue()
+	library.server_browser.entries[0].basename = "changed.mp4"
+	check(queue.size() == 1 and queue[0].metadata.basename == "movie_180_sbs.mp4", "Server queue keeps a copy of naming metadata even when details are displayed")
+	library.free()
 
 func press_at(menu: Node3D, x: float, y: float, hand: String = "right_hand") -> bool:
 	return menu.press_pointer(hand, menu.to_global(Vector3(x, y, 1)), -menu.global_basis.z, true)
@@ -80,6 +99,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	preload("res://scripts/i18n.gd").use("en") # text checks are written in English
+	_check_video_queue()
 	var directory := ProjectSettings.globalize_path("res://../../artifacts/player-menu-host/" + str(Time.get_ticks_usec()))
 	DirAccess.make_dir_recursive_absolute(directory)
 	var host := Host.new()
@@ -137,22 +157,22 @@ func _run() -> void:
 	video.depth_enabled = true # Native first depth pair accepted; exercise live bridge values.
 	var revisions := host.calls.filter(func(call): return call[0] == "revise").size()
 	var depth_y := func(value: float) -> float: return lerpf(Menu.DEPTH_SPAN.x, Menu.DEPTH_SPAN.y, Menu.DepthStrength.to_fraction(value))
-	check(press_at(menu, Menu.DEPTH_X, depth_y.call(2.5), "left_hand") and is_equal_approx(video.depth_strength, 2.5)
-		and host.calls.back()[0] == "depth_view" and is_equal_approx(host.calls.back()[2], .0875), "Slider sets 250% and sends actual native parallax")
-	menu.update_pointer("right_hand", menu.to_global(Vector3(Menu.DEPTH_X, depth_y.call(4), 1)), -menu.global_basis.z, true)
-	check(is_equal_approx(video.depth_strength, 2.5) and not press_at(menu, Menu.DEPTH_X, depth_y.call(4)), "Other hand cannot move or steal an active depth drag")
+	check(press_at(menu, Menu.DEPTH_X, depth_y.call(1.5), "left_hand") and is_equal_approx(video.depth_strength, 1.5)
+		and host.calls.back()[0] == "depth_view" and is_equal_approx(host.calls.back()[2], .0525), "Slider sets 150% and sends actual native parallax")
+	menu.update_pointer("right_hand", menu.to_global(Vector3(Menu.DEPTH_X, depth_y.call(2), 1)), -menu.global_basis.z, true)
+	check(is_equal_approx(video.depth_strength, 1.5) and not press_at(menu, Menu.DEPTH_X, depth_y.call(2)), "Other hand cannot move or steal an active depth drag")
 	menu.update_pointer("left_hand", menu.to_global(Vector3(Menu.DEPTH_X, Menu.DEPTH_SPAN.y + .2, 1)), -menu.global_basis.z, true)
-	check(video.depth_strength == 4.0 and menu._depth_label.text == "400%" and is_equal_approx(float(video.material.get_shader_parameter("depth_shift")), .14), "Drag beyond top clamps to 400% and updates shader")
+	check(video.depth_strength == 2.0 and menu._depth_label.text == "200%" and is_equal_approx(float(video.material.get_shader_parameter("depth_shift")), .07), "Drag beyond top clamps to PTMediaServer's 200% and updates shader")
 	check(host.calls.filter(func(call): return call[0] == "revise").size() == revisions, "Nonzero drag never restarts depth inference or playback")
 	menu.update_pointer("left_hand", menu.to_global(Vector3(Menu.DEPTH_X, Menu.DEPTH_SPAN.x - .2, 1)), -menu.global_basis.z, true)
-	check(not video.depth_requested and not video.auto_depth and video.depth_strength == 4.0 and menu._depth_label.text == "Off", "Bottom disables 3D and retains last nonzero strength")
+	check(not video.depth_requested and not video.auto_depth and video.depth_strength == 2.0 and menu._depth_label.text == "Off", "Bottom disables 3D and retains last nonzero strength")
 	menu.release_pointer("left_hand", Vector3.ZERO, Vector3.ZERO, false)
 	var depth_calls := host.calls.size()
 	menu.update_pointer("left_hand", menu.to_global(Vector3(Menu.DEPTH_X, depth_y.call(2), 1)), -menu.global_basis.z, true)
 	check(host.calls.size() == depth_calls, "Depth drag stops on trigger release")
 	var saved_strength := ConfigFile.new()
 	saved_strength.load(main.settings_path)
-	check(saved_strength.get_value("video", "depth_strength") == 4.0 and not saved_strength.get_value("effects", "auto_3d"), "Release persists strength and manual Off")
+	check(saved_strength.get_value("video", "depth_strength") == 2.0 and not saved_strength.get_value("effects", "auto_3d"), "Release persists strength and manual Off")
 	check(click(menu, 112) and not menu._depth_open, "Close disabled depth slider")
 	video.depth_enabled = false
 	video.set_projection(1)
@@ -171,15 +191,48 @@ func _run() -> void:
 	check(click(menu, Menu.MODE) and click(menu, Menu.MODE_PROJECTION) and video.geometry == 0 and not video.stereo_sbs, "Back to flat 2D through the mode tiles")
 	check(click(menu, Menu.MODE_STEREO + 3) and video.depth_requested and click(menu, Menu.MODE_STEREO) and not video.depth_requested, "2D tile ends 2D -> 3D")
 	check(click(menu, Menu.MODE), "Mode panel closes")
-	check(click(menu, 103) and video.control.target_ms == 10000 and host.calls.back()[-1] == 10000, "Pointer forward seeks actual processing generation")
 	video.control.observe(20000, 60000)
-	check(click(menu, 101) and video.control.target_ms == 0, "Opposite seek follows pending seek target")
-	check(menu.press_pointer("left_hand", menu.to_global(Vector3(-Menu.BAR_SEEK / 4, -0.08, 1)), -menu.global_basis.z, true) and video.control.target_ms == 15000 and host.calls.back()[-1] == 15000, "Ray quarter-progress seeks real source to 15s")
+	menu.refresh_values()
+	var seek_calls := host.calls.size()
+	check(menu.press_pointer("left_hand", menu.to_global(Vector3(-Menu.BAR_SEEK / 4, -0.08, 1)), -menu.global_basis.z, true) and host.calls.size() == seek_calls, "Ray press previews time without starting a seek")
 	menu.release_pointer("left_hand", Vector3.ZERO, Vector3.ZERO, true)
-	check(menu.press_pointer("right_hand", menu.to_global(Vector3(Menu.BAR_SEEK / 4, -0.08, 1)), -menu.global_basis.z, true) and video.control.target_ms == 45000, "Other ray can seek directly to 75 percent")
+	check(video.control.target_ms == 15000 and host.calls.back()[-1] == 15000, "Click release seeks real source to 15s")
+	menu.refresh_values()
+	check(menu._elapsed.text == "00:15" and is_equal_approx(menu._thumb.position.x, -Menu.BAR_SEEK / 4)
+		and video.control.observed_position_ms == 20000, "Released seek keeps the thumb at its queued target while the clock remains at the original frame")
+	video.control.observe(19000, 60000)
+	video.control.take_pending()
+	video.control.observe(18000, 60000)
+	menu.refresh_values()
+	check(menu._elapsed.text == "00:15" and is_equal_approx(menu._thumb.position.x, -Menu.BAR_SEEK / 4),
+		"Stale source clock during first-frame wait cannot bounce the timeline back")
+	video.control.first_frame()
+	menu.refresh_values()
+	check(menu._elapsed.text == "00:15" and video.control.observed_position_ms == 15000,
+		"Confirmed first frame changes ownership without moving the thumb")
+	video.control.observe(16000, 60000)
+	menu.refresh_values()
+	check(menu._elapsed.text == "00:16" and menu._thumb.position.x > -Menu.BAR_SEEK / 4,
+		"Timeline resumes advancing from the confirmed target")
+	check(menu.press_pointer("right_hand", menu.to_global(Vector3(Menu.BAR_SEEK / 4, -0.08, 1)), -menu.global_basis.z, true), "Other ray starts a time preview")
 	menu.release_pointer("right_hand", Vector3.ZERO, Vector3.ZERO, true)
-	check(menu.press_pointer("right_hand", menu.to_global(Vector3(Menu.BAR_SEEK / 2 + 0.02, -0.08, 1)), -menu.global_basis.z, true) and video.control.target_ms == 59999, "Timeline edge clamps before EOF through production playback control")
+	check(video.control.target_ms == 45000, "Other ray release seeks to 75 percent")
+	check(menu.press_pointer("right_hand", menu.to_global(Vector3(Menu.BAR_SEEK / 2 + 0.02, -0.08, 1)), -menu.global_basis.z, true), "Timeline edge accepts a preview")
 	menu.release_pointer("right_hand", Vector3.ZERO, Vector3.ZERO, true)
+	check(video.control.target_ms == 59999, "Timeline release clamps before EOF")
+	seek_calls = host.calls.size()
+	menu.press_pointer("left_hand", menu.to_global(Vector3(-Menu.BAR_SEEK / 4, -0.08, 1)), -menu.global_basis.z, true)
+	menu.update_pointer("left_hand", menu.to_global(Vector3(Menu.BAR_SEEK / 4, -0.08, 1)), -menu.global_basis.z, true)
+	check(host.calls.size() == seek_calls and menu._seek_preview == 45000, "Drag changes preview only")
+	menu.release_pointer("left_hand", Vector3.ZERO, Vector3.ZERO, true)
+	check(video.control.target_ms == 45000 and host.calls.filter(func(c): return c[0] == "revise").back()[-1] == 45000, "Drag submits its final target")
+	seek_calls = host.calls.size()
+	menu.press_pointer("left_hand", menu.to_global(Vector3(0, -0.08, 1)), -menu.global_basis.z, true)
+	menu.cancel_pointer("left_hand")
+	check(host.calls.size() == seek_calls, "Cancelled drag submits no seek")
+	video.control.reject()
+	menu.refresh_values()
+	check(menu._elapsed.text == "00:16", "Rejected seek returns to the confirmed playback position")
 	var call_count := host.calls.size()
 	video.control.duration_ms = -1
 	menu.refresh_values()
@@ -187,7 +240,7 @@ func _run() -> void:
 	video.control.duration_ms = 60000
 	menu.refresh_values()
 	check(not menu.text_snapshot().contains("Press trigger") and not menu.text_snapshot().contains("controller"), "Product controls omit implementation and interaction instruction text")
-	check(click(menu, 11) and menu.section == 1 and click(menu, 102) and video.loop_enabled and menu.visible and menu.text_snapshot().contains("On"), "Loop state toggles without closing menu")
+	check(click(menu, 11) and menu.section == 1 and click(menu, 100 + Menu.OPERATIONS[1].find("loop")) and video.loop_enabled and menu.visible and menu.text_snapshot().contains("On"), "Loop state toggles without closing menu")
 	check(click(menu, 10) and menu.section == 0, "Arrow returns from the settings panel to the slim bar")
 	check(click(menu, 11) and menu.section == 1 and menu.visible, "Settings tab selected by ray")
 	check(not menu.text_snapshot().contains("Test video") and not Menu.OPERATIONS[1].has("calibration"), "Settings no longer offers test videos")
@@ -357,19 +410,34 @@ func _run() -> void:
 	video.load_mode_lock({"geometry": 9, "layout": 1, "depth": false, "fisheye_fov": 180})
 	check(video.mode_lock.is_empty(), "A malformed stored lock is ignored")
 	video.open_local("file:///sticky/first_2D.mp4", "first_2D.mp4")
-	main._on_depth_strength(3.25, false)
+	main._on_depth_strength(1.65, false)
 	video.open_local("file:///sticky/next_2D.mp4", "next_2D.mp4")
-	check(video.auto_depth and video.depth_requested and video.depth_strength == 3.25, "Next 2D video retains conversion and non-preset strength")
+	check(video.auto_depth and video.depth_requested and is_equal_approx(video.depth_strength, 1.65), "Next 2D video retains conversion and non-preset strength")
 	video.open_local("file:///sticky/stereo_SBS.mp4", "stereo_SBS.mp4")
 	check(video.stereo_sbs and not video.depth_requested and video.auto_depth, "Stereo video bypasses inference without erasing choice")
 	video.open_local("file:///sticky/flat_2D.mp4", "flat_2D.mp4")
-	check(video.depth_requested and video.depth_strength == 3.25, "Following flat video restores strength")
+	check(video.depth_requested and is_equal_approx(video.depth_strength, 1.65), "Following flat video restores strength")
 	main._on_depth_strength(0.0, false)
 	video.open_local("file:///sticky/first_2D.mp4", "first_2D.mp4")
 	check(not video.depth_requested and not video.auto_depth, "Manual Off wins over a file's previous 3D memory")
 	main.settings.set_value("video", "mode_lock", {})
 	main.settings.save(main.settings_path)
 	_check_device_status()
+	video.open_local("file:///menu.mp4", "测试电影 😀")
+	menu.section = 0
+	main.video_queue = [{"uri": "file:///menu.mp4", "title": "测试电影 😀"}, {"uri": "file:///next.mp4", "title": "Next"}]
+	menu.refresh()
+	check(not click(menu, 101), "First video disables previous")
+	check(click(menu, 103) and video.local_uri == "file:///next.mp4" and host.calls.any(func(c): return c[0] == "open" and c[1] == "file:///next.mp4"), "Pointer next opens the next video through the production backend")
+	check(not click(menu, 103) and menu.visible, "Last video disables next and keeps controls open")
+	check(click(menu, 101) and video.local_uri == "file:///menu.mp4", "Pointer previous returns to the original video")
+	check(menu._tips[101] == "Previous video" and menu._tips[103] == "Next video", "Navigation tooltips replace seek labels")
+	check(menu._buttons.filter(func(b): return b.target == 101)[0].node.get_child(1).material_override.albedo_texture == menu.Icons.texture("previous_video"), "Previous button uses the skip icon")
+	check(menu._buttons.filter(func(b): return b.target == 103)[0].node.get_child(1).material_override.albedo_texture == menu.Icons.texture("next_video"), "Next button uses the skip icon")
+	main.video_queue.clear()
+	menu.refresh_values()
+	var navigation_calls := host.calls.size()
+	check(not click(menu, 101) and not click(menu, 103) and host.calls.size() == navigation_calls, "A video opened without a browse queue cannot navigate or seek via skip buttons")
 	video.free()
 	menu.free()
 	recent.free()

@@ -69,7 +69,7 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
                     "stash" -> if (account.key.isNotEmpty()) c.setRequestProperty("ApiKey", account.key)
                     "emby", "jellyfin" -> {
                         val scheme = if (account.provider == "emby") "Emby" else "MediaBrowser"
-                        c.setRequestProperty("Authorization", "$scheme Client=\"Quest Player\", Device=\"Quest\", DeviceId=\"${account.id}\", Version=\"0.1.0\"")
+                        c.setRequestProperty("Authorization", "$scheme Client=\"Quest Player\", Device=\"Quest\", DeviceId=\"${account.id}\", Version=\"0.2\"")
                         if (account.key.isNotEmpty()) c.setRequestProperty("X-Emby-Token", account.key)
                     }
                     "xbvr" -> if (account.username.isNotEmpty()) c.setRequestProperty("Authorization", "Basic " +

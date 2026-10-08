@@ -32,7 +32,9 @@ func poll(left: Vector2, right: Vector2, zoom: bool = false) -> Array[Dictionary
 		# Left up/down is the volume (up also unmutes); mute lives on the menu's volume slider.
 		var action: Dictionary = {}
 		if absf(stick.x) > 0.75 and absf(stick.y) < 0.3:
-			action = {"operation": "audio_track" if hand == "left" else "seek", "direction": 1 if stick.x > 0 else -1}
+			var direction := 1 if stick.x > 0 else -1
+			action = {"operation": "seek", "hand": hand, "direction": direction,
+				"delta_ms": direction * (20000 if hand == "left" else 10000)}
 		elif absf(stick.y) > 0.75 and absf(stick.x) < 0.3:
 			action = {"operation": "volume", "direction": 1 if stick.y > 0 else -1}
 		if not action.is_empty():

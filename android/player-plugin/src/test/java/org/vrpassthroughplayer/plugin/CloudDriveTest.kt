@@ -57,12 +57,12 @@ class CloudDriveTest {
             assertEquals("/中文 + #%", args["dir"])
             assertEquals("${++requests}", args["page"])
             val items = JSONArray()
-            if (requests == 1) repeat(1000) { items.put(JSONObject().put("fs_id", 9007199254740993L + it)
+            if (requests == 1) repeat(CloudDrive.PAGE_SIZE) { items.put(JSONObject().put("fs_id", 9007199254740993L + it)
                 .put("server_filename", "$it.mp4").put("isdir", 0).put("size", 9)) }
             CloudResponse(JSONObject().put("errno", 0).put("list", items))
         })
         val files = drive.list("/中文 + #%")
-        assertEquals(2, requests); assertEquals(1000, files.size)
+        assertEquals(2, requests); assertEquals(CloudDrive.PAGE_SIZE, files.size)
         assertEquals("9007199254740993", files[0].id)
     }
     @Test fun baiduResolvesOriginalFileAndScopesCookies() {

@@ -109,6 +109,10 @@ func _run() -> void:
 	library.chosen.connect(func(_uri: String, _title: String): picks += 1)
 	root.add_child(library)
 	library.toggle()
+	# Scrolling remains a library-list interaction; Recent now uses page buttons.
+	library.section = Library.Section.LOCAL
+	library._local_entries = library.catalog.list_recent()
+	library.refresh()
 	var direction := -library.global_basis.z
 	var row := library.to_global(Vector3(-0.36, Library.GRID_TOP - Library.TILE_SIZE.y * 0.5, 1))
 	check(library.press_pointer("right_hand", row, direction, true), "Pinch ray starts list selection")
@@ -136,9 +140,11 @@ func _run() -> void:
 	var seek_button: Dictionary = player._buttons.filter(func(b): return b.target == Player.SEEK)[0]
 	var seek_origin: Vector3 = seek_button.node.global_position + Vector3(0, 0, 1)
 	check(player.press_pointer("right_hand", seek_origin, Vector3.FORWARD, true), "Timeline pinch accepted")
+	check(seeks.is_empty(), "Timeline press only previews the target")
 	player.update_pointer("right_hand", seek_origin + Vector3(0.3, 0, 0), Vector3.FORWARD, true)
+	var final_seek := player._seek_preview
 	player.release_pointer("right_hand", seek_origin, Vector3.FORWARD, true)
-	check(seeks.size() == 2 and seeks[1] > seeks[0], "Timeline drag commits destination on release")
+	check(seeks == [final_seek] and final_seek > player._seek_start, "Timeline drag commits only its final destination on release")
 	player.press_pointer("right_hand", seek_origin, Vector3.FORWARD, true)
 	var before := seeks.size()
 	player.update_pointer("right_hand", seek_origin + Vector3(0.3, 0, 0), Vector3.FORWARD, true)

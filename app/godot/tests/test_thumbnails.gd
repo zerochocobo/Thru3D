@@ -5,6 +5,7 @@ extends SceneTree
 const Thumbnails := preload("res://scripts/thumbnail_cache.gd")
 const Menu := preload("res://scripts/library_menu.gd")
 const Video := preload("res://scripts/mpv_video_display.gd")
+const Recent := preload("res://scripts/recent_files.gd")
 
 var checks := 0
 var failures: Array[String] = []
@@ -60,9 +61,9 @@ func _run() -> void:
 	check(menu._covers.has("http://127.0.0.1:9/cover.jpg"), "DLNA cover is fetched from the server's URL")
 	menu._cancel_covers()
 
-	# Settings > video > clear cache: the first press arms, the second clears.
+	# Settings > general > clear cache: the first press arms, the second clears.
 	menu.section = Menu.Section.SETTINGS
-	menu.tab = menu.VIDEO_TAB
+	menu.tab = menu.GENERAL_TAB
 	menu.refresh()
 	var index := menu.rows.find_custom(func(r): return r.has("clear_cache"))
 	check(index >= 0 and str(menu.rows[index].detail) != "", "Clear cache row shows the size")
@@ -71,9 +72,46 @@ func _run() -> void:
 	menu._choose(menu.rows[menu.rows.find_custom(func(r): return r.has("clear_cache"))])
 	check(not Thumbnails.has("file:///v.mp4") and Thumbnails.usage().x == 0, "Second press clears the cache")
 
-	# Playback asks for a picture of local and SMB videos only, never of DLNA streams.
+	# Every stable playback source can keep its displayed frame; ephemeral proxies cannot.
 	check(Video._thumbnail_source("smb://nas/a.mp4") and Video._thumbnail_source("content://media/1")
-		and not Video._thumbnail_source("http://192.168.31.185/a.mp4"), "Only played local and SMB videos get a frame")
+		and Video._thumbnail_source("http://192.168.31.185/a.mp4") and Video._thumbnail_source("https://nas/a.mp4")
+		and Video._thumbnail_source("cloud://account/a.mp4") and Video._thumbnail_source("medialib://server/scene/1"),
+		"Played local, SMB, DLNA, cloud and media-server videos get a frame")
+	check(not Video._thumbnail_source("http://127.0.0.1:8765/proxy") and not Video._thumbnail_source("ftp://nas/a.mp4"),
+		"Ephemeral proxy and unsupported sources are not persisted")
+	var recent := Recent.new("user://thumbnail_recent_test")
+	recent.clear_all(); recent.save()
+	var uri := "http://192.168.31.185/movie.mp4"
+	var cover := "http://192.168.31.185/cover.jpg"
+	recent.opened(uri, "DLNA movie", false)
+	check(recent.set_cover(uri, cover) and recent.save(), "DLNA cover is saved with the recent entry")
+	recent.opened(uri, "DLNA movie reopened", false); recent.save()
+	var reloaded := Recent.new("user://thumbnail_recent_test")
+	reloaded.load_saved()
+	check(reloaded.lookup(uri).get("cover") == cover, "Reopening and reloading history preserve the server cover URL")
+	check(not reloaded.set_cover(uri, "file:///private/image.jpg") and not reloaded.set_cover(uri, "javascript:test"),
+		"Recent covers accept only HTTP images")
+	menu.catalog = reloaded; menu.section = Menu.Section.RECENT; menu.refresh()
+	check(menu.rows.size() == 1 and menu.rows[0].get("cover") == cover, "Recent tiles retain DLNA cover metadata")
+	Thumbnails.store(uri, frame)
+	check(menu._picture(menu.rows[0]) != null, "Unavailable DLNA cover falls back to the played frame immediately")
+	menu.refresh()
+	var recent_tile: Dictionary = menu._buttons.filter(func(b): return b.target == menu.ROW_BASE)[0]
+	var recent_area: MeshInstance3D = recent_tile.node.get_child(1)
+	check(recent_area.material_override.albedo_texture == Thumbnails.texture(uri), "Actual recent card binds the screenshot when its DLNA cover is absent")
+	menu._cancel_covers()
+	Thumbnails.store(cover, wide)
+	var server_picture := menu._picture(menu.rows[0])
+	check(server_picture == Thumbnails.texture(cover), "Available server cover takes priority over a played frame")
+	check(menu.video_queue()[0].metadata.cover == cover, "Previous/next playback queue keeps cover metadata")
+	menu._cancel_covers(); reloaded.clear_all(); reloaded.save()
+	Thumbnails.protect_keys([uri])
+	for cache_index in 4: Thumbnails.store("http://nas/cache-test/%d" % cache_index, frame)
+	Thumbnails.prune(2)
+	check(Thumbnails.usage().x == 2 and Thumbnails.has(uri), "Bounded cache pruning preserves the current recent screenshot")
+	Thumbnails.protect_keys([])
+	Thumbnails.prune(256, 1)
+	check(Thumbnails.usage().x == 0, "Byte limit also evicts generated thumbnails")
 
 	Thumbnails.clear()
 	print("thumbnail checks=%d failures=%d" % [checks, failures.size()])

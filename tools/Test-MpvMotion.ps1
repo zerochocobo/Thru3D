@@ -1,4 +1,4 @@
-param([string]$Serial='2G0YC5ZF7V0664', [ValidateSet('256x144','384x216','512x288','256x256','384x384','512x512')][string]$Profile='384x216', [switch]$Install, [switch]$LegacyFullFrameReference, [switch]$LegacyAspectReference, [switch]$Ordered)
+param([Parameter(Mandatory=$true)][string]$Serial, [ValidateSet('256x144','384x216','512x288','256x256','384x384','512x512')][string]$Profile='384x216', [switch]$Install, [switch]$LegacyFullFrameReference, [switch]$LegacyAspectReference, [switch]$Ordered)
 $ErrorActionPreference='Stop'
 if ($LegacyFullFrameReference -and $LegacyAspectReference) { throw 'Select only one legacy reference' }
 $workspace=Split-Path -Parent $PSScriptRoot

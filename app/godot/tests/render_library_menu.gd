@@ -34,7 +34,7 @@ func _run() -> void:
 	var platform := Test.FakePlatform.new()
 	var menu := Menu.new()
 	menu.catalog = Catalog.new()
-	menu.settings_provider = func(): return {"profile": "320x320", "profiles": ["320x320", "384x216", "512x512"], "output_width": 0, "version": "0.1"}
+	menu.settings_provider = func(): return {"profile": "320x320", "profiles": ["320x320", "384x216", "512x512"], "output_width": 0, "version": ProjectSettings.get_setting("application/config/version"), "display_quality_pending": true}
 	camera.add_child(menu)
 	menu.attach_platform(platform)
 	menu.toggle()
@@ -44,14 +44,14 @@ func _run() -> void:
 		["smb_editor", [Menu.BACK, Menu.BACK, Menu.ADD, Menu.KEY_BASE + 1, Menu.KEY_BASE + 9]],
 		["dlna", [Menu.CANCEL, Menu.NAV_BASE + Menu.Section.DLNA]], ["cloud", [Menu.NAV_BASE + Menu.Section.CLOUD]],
 		["cloud_folder", [Menu.ROW_BASE]], ["settings", [Menu.NAV_BASE + Menu.Section.SETTINGS]], ["video", [Menu.TAB_BASE + Menu.VIDEO_TAB]], ["subtitles", [Menu.TAB_BASE + Menu.SUBTITLES_TAB]], ["about", [Menu.TAB_BASE + Menu.ABOUT_TAB]],
-		["language", [Menu.ROW_BASE + 4]], ["credits", [Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
+		["language", [Menu.TAB_BASE + Menu.GENERAL_TAB]], ["display", [Menu.TAB_BASE + Menu.DISPLAY_TAB]], ["credits", [Menu.TAB_BASE + Menu.ABOUT_TAB, Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
 	if OS.get_environment("QUEST_ABOUT_PREVIEW_ONLY") == "1":
 		steps = [["about", [Menu.NAV_BASE + Menu.Section.SETTINGS, Menu.TAB_BASE + Menu.ABOUT_TAB]],
-			["language", [Menu.ROW_BASE + 4]], ["credits", [Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
+			["language", [Menu.TAB_BASE + Menu.GENERAL_TAB]], ["display", [Menu.TAB_BASE + Menu.DISPLAY_TAB]], ["credits", [Menu.TAB_BASE + Menu.ABOUT_TAB, Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
 	if OS.get_environment("QUEST_MODELS_PREVIEW_ONLY") == "1":
 		steps = [["settings", [Menu.NAV_BASE + Menu.Section.SETTINGS]], ["subtitles", [Menu.TAB_BASE + Menu.SUBTITLES_TAB]],
 			["background", [Menu.TAB_BASE + Menu.BACKGROUND_TAB]], ["about", [Menu.TAB_BASE + Menu.ABOUT_TAB]],
-			["language", [Menu.ROW_BASE + 4]], ["credits", [Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
+			["language", [Menu.TAB_BASE + Menu.GENERAL_TAB]], ["display", [Menu.TAB_BASE + Menu.DISPLAY_TAB]], ["credits", [Menu.TAB_BASE + Menu.ABOUT_TAB, Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
 	for step in steps:
 		for target in step[1]:
 			menu._activate(target)

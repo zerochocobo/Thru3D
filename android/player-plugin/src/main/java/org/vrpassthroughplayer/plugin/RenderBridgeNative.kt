@@ -37,6 +37,10 @@ internal object RenderBridgeNative {
                                              rect: FloatArray, scout: Boolean): Long
     /** EGLImage of a held decoder-buffer slot for Godot's ExternalTexture; 0 for RGBA colors. */
     @JvmStatic external fun colorImage(handle: Long, token: Long): Long
+    /** One independent GPU transition copy: {handle, RGBA texture, R8 mask, width, height, copy us}.
+     * Completes before returning so a subsequent MediaCodec seek can safely flush its surface. */
+    @JvmStatic external fun freezePair(handle: Long, token: Long, warped: Boolean): LongArray
+    @JvmStatic external fun releaseFrozen(handle: Long)
     /** {input L, input R, Alpha L, Alpha R} AHardwareBuffer handles of a held color (scout: its full-eye set). */
     /** Each returned handle holds a reference: pass the array to [releaseBuffers] when done. */
     @JvmStatic external fun zeroCopyBuffers(handle: Long, token: Long, scout: Boolean): LongArray

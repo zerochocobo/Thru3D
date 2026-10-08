@@ -13,6 +13,24 @@ internal fun interface CloudTransport {
     fun request(url: String, cookie: String, form: Map<String, String>?): CloudResponse
 }
 internal class CloudResponse(val json: JSONObject, val cookies: List<String> = emptyList())
+internal class CloudCancellation : CloudTransport {
+    @Volatile var cancelled = false
+        private set
+    private var active: HttpURLConnection? = null
+    @Synchronized fun attach(connection: HttpURLConnection) {
+        if (cancelled) { connection.disconnect(); throw CloudFailure() }
+        active = connection
+    }
+    @Synchronized fun detach(connection: HttpURLConnection) { if (active === connection) active = null }
+    fun cancel() {
+        val connection = synchronized(this) { cancelled = true; active.also { active = null } }
+        connection?.disconnect()
+    }
+    override fun request(url: String, cookie: String, form: Map<String, String>?): CloudResponse {
+        if (cancelled) throw CloudFailure()
+        return CloudHttp.request(url, cookie, form, this)
+    }
+}
 internal class CloudFailure(val reason: String = "cloud_unavailable") : IOException(when (reason) {
     "cloud_login_required" -> "Please sign in to your cloud account again"
     "cloud_store_unavailable" -> "Cloud account storage unavailable"
@@ -33,11 +51,15 @@ internal object CloudHttp : CloudTransport {
         value.all { it.code in 32..126 } && value.split(';').all { '=' in it && it.substringBefore('=').trim().matches(Regex("[A-Za-z0-9_-]+")) }
 
     override fun request(url: String, cookie: String, form: Map<String, String>?): CloudResponse {
+        return request(url, cookie, form, null)
+    }
+    fun request(url: String, cookie: String, form: Map<String, String>?, cancellation: CloudCancellation?): CloudResponse {
         val uri = URI(url)
         require(uri.scheme == "https" && uri.host in apiHosts && uri.port == -1 && uri.rawUserInfo == null)
         require(validCookie(cookie))
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
+            cancellation?.attach(connection)
             connection.connectTimeout = 15000; connection.readTimeout = 20000
             connection.instanceFollowRedirects = false; connection.useCaches = false
             connection.setRequestProperty("User-Agent", UA)
@@ -67,6 +89,6 @@ internal object CloudHttp : CloudTransport {
                 .filter { it.key.equals("Set-Cookie", true) }.flatMap { it.value })
         } catch (error: CloudFailure) { throw error }
         catch (_: Exception) { throw CloudFailure() }
-        finally { connection.disconnect() }
+        finally { cancellation?.detach(connection); connection.disconnect() }
     }
 }

@@ -3,6 +3,10 @@ extends Node3D
 const Geometry := preload("res://scripts/video_geometry.gd")
 var panel: MeshInstance3D
 var material: ShaderMaterial
+var sharpness := 0.2:
+	set(value):
+		sharpness = clampf(value, 0.0, 0.6) if is_finite(value) else 0.2
+		if material: material.set_shader_parameter("sharpness", sharpness)
 var view_camera: Camera3D
 var geometry := Geometry.Geometry.FLAT
 var stereo_sbs := false
@@ -45,6 +49,7 @@ func initialize_surface(shader: Shader) -> void:
 	panel.visible = false
 	material = ShaderMaterial.new()
 	material.shader = shader
+	material.set_shader_parameter("sharpness", sharpness)
 	material.render_priority = -10
 	panel.material_override = material
 	add_child(panel)

@@ -1,4 +1,4 @@
-param([string]$Serial = '2G0YC5ZF7V0664', [switch]$Pixels, [switch]$NormalPixels, [switch]$Xr, [switch]$RequireLiveHead, [switch]$KeepAwake,
+param([Parameter(Mandatory=$true)][string]$Serial, [switch]$Pixels, [switch]$NormalPixels, [switch]$Xr, [switch]$RequireLiveHead, [switch]$KeepAwake,
     [ValidateSet('mp03_frame_identity','mp05_person_still')][string]$Fixture = 'mp03_frame_identity')
 $ErrorActionPreference = 'Stop'
 if ($RequireLiveHead -and !$Xr) { throw 'RequireLiveHead needs the XR entry.' }

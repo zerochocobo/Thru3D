@@ -6,3 +6,4 @@
 *.webp binary
 *.mp4 binary
 *.jar binary
+*.bin binary

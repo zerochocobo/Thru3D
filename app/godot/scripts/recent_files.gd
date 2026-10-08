@@ -12,6 +12,7 @@ static func valid_entry(entry: Variant, serial: int) -> bool:
 		return false
 	if not entry.get("title") is String or entry.title.length() > 256 or not entry.get("persisted") is bool:
 		return false
+	if entry.has("cover") and not valid_cover(entry.cover): return false
 	for name in ["position_ms", "duration_ms", "opened"]:
 		var number: Variant = entry.get(name)
 		if not (number is int or number is float) or not is_finite(float(number)) or floorf(float(number)) != float(number):
@@ -74,9 +75,26 @@ func opened(uri: String, title: String, persisted: bool, kind: String = "video")
 		"kind": "image" if kind == "image" else "video",
 		"persisted": persisted, "position_ms": int(old.get("position_ms", 0)),
 		"duration_ms": int(old.get("duration_ms", -1)), "opened": sequence + 1}
+	if valid_cover(old.get("cover", "")): entries[key]["cover"] = old.cover
 	# Reserve room for the checksummed JSON envelope and its escaped payload.
 	while entries.size() > RECENT_LIMIT or JSON.stringify(entries).to_utf8_buffer().size() > MAX_BYTES / 3:
 		entries.erase(key_for(list_recent().back().uri))
+	dirty = true
+	return true
+
+static func valid_cover(value: Variant) -> bool:
+	return value is String and value.length() <= 2048 and (value.begins_with("http://") or value.begins_with("https://"))
+
+func set_cover(uri: String, cover: String) -> bool:
+	var key := key_for(uri)
+	if not entries.has(key) or not valid_cover(cover) or entries[key].get("cover", "") == cover: return false
+	var old: Dictionary = entries[key]
+	var updated := old.duplicate(true)
+	updated["cover"] = cover
+	entries[key] = updated
+	if JSON.stringify(entries).to_utf8_buffer().size() > MAX_BYTES / 3:
+		entries[key] = old
+		return false
 	dirty = true
 	return true
 

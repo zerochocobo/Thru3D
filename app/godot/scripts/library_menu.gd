@@ -14,14 +14,21 @@ const NAV := ["Recent", "Local files", "SMB network", "DLNA network", "Cloud dri
 const NAV_ICONS := ["history", "device", "server", "cast", "cloud", "settings", "media_library"]
 const NAV_ORDER := [Section.RECENT, Section.LOCAL, Section.SMB, Section.DLNA, Section.CLOUD, Section.MEDIA_SERVER, Section.SETTINGS]
 const ServerBrowser := preload("res://scripts/media_server_browser.gd")
+const PlatformMethods := preload("res://scripts/platform_methods.gd")
 var server_browser: RefCounted = ServerBrowser.new(self)
-const SETTING_TABS := ["Video", "Subtitles", "Background", "About"]
+const CloudAccountActions := preload("res://scripts/cloud_account_actions.gd")
+var cloud_accounts: RefCounted = CloudAccountActions.new(self)
+const Quality := preload("res://scripts/display_quality.gd")
+const SETTING_TABS := ["Video", "Subtitles", "Background", "About", "Display", "General"]
+const GENERAL_TAB := 5
+const SETTING_ORDER := [GENERAL_TAB, DISPLAY_TAB, 0, 1, 2, 3]
+const DISPLAY_TAB := 4
 const VIDEO_TAB := 0
 const SUBTITLES_TAB := 1
 const BACKGROUND_TAB := 2
 const ABOUT_TAB := 3
 const ABOUT_HOME := 36
-var _about_page := 0 # app, language, credits
+var _about_page := 0 # app, credits
 ## VR subtitle distances (metres); the text keeps its angular size at any distance.
 const SUBTITLE_DISTANCES := [5.0, 7.5, 10.0, 15.0, 20.0]
 const OUTPUT_WIDTHS := [0, 5760, 4096]
@@ -61,6 +68,12 @@ const GRANT := 47
 const CLEAR_HISTORY := 49
 const ALL_FILES := 34
 const CLOUD_ACCOUNTS := 35
+const CLOUD_PREVIOUS := 80
+const CLOUD_NEXT := 81
+const RESTART_APP := 82
+const QUIT_APP := 83
+const RECENT_PREVIOUS := 84
+const RECENT_NEXT := 85
 const SCROLLBAR := 48
 const CRUMB_BASE := 50
 const FILTER_BASE := 70
@@ -69,6 +82,7 @@ const ImageInfo := preload("res://scripts/image_info.gd")
 ## Browsing shows a grid like common VR players (folders and videos as tiles); settings stay a list.
 const COLS := 4
 const GRID_LINES := 3
+const RECENT_PAGE_SIZE := COLS * GRID_LINES
 const TILE_SIZE := Vector2(0.3, 0.27)
 const GRID_PITCH := Vector2(0.33, 0.29)
 const GRID_TOP := 0.375
@@ -112,6 +126,18 @@ var _dlna_entries: Array = []
 var _cloud_stack: Array = []
 var _cloud_entries: Array = []
 var _cloud_setup := false
+var _cloud_page := 0 # zero-based, committed only after a successful response
+var _recent_page := 0
+var _recent_count := 0
+var _recent_all_rows: Array[Dictionary] = []
+var _cloud_requested_page := 0
+var _cloud_offsets: Array[int] = [0]
+var _cloud_next := -1
+var _cloud_total := -1
+var _cloud_page_size := 48
+var _cloud_busy := false
+var _cloud_location := ""
+var _cloud_positions := {}
 var _editor := {}                  # SMB server being edited; empty when not editing
 var _field := 1
 var _shift := false
@@ -121,6 +147,7 @@ var _covers := {}                  # DLNA cover URL -> HTTPRequest while it down
 
 func dismiss() -> void:
 	server_browser.cancel()
+	_cancel_cloud()
 	super()
 
 func _ready() -> void:
@@ -141,16 +168,14 @@ func attach_platform(value: Object) -> void:
 func _on_android_lifecycle(state: String) -> void:
 	if state == "resume" and server_browser.setup:
 		server_browser.setup = false
-		server_browser.load_servers()
-		refresh()
+		if section == Section.MEDIA_SERVER:
+			server_browser.load_servers()
+			refresh()
 	if state == "resume" and _cloud_setup:
-		_cloud_setup = false
-		_cloud_stack = []
-		_cloud_entries = []
-		_load_section()
-		refresh()
+		cloud_accounts.changed()
 
 func _reset_navigation() -> void:
+	_recent_page = 0
 	_drag = {}
 	_fling = 0.0
 	scroll = 0.0
@@ -314,6 +339,7 @@ func _place_list() -> void:
 		_bar_thumb.position.y = span.x - travel - thumb * 0.5
 
 func _grid() -> bool:
+	if section == Section.CLOUD and not cloud_accounts.mode.is_empty(): return false
 	if section == Section.MEDIA_SERVER: return server_browser.grid()
 	return section != Section.SETTINGS
 
@@ -356,17 +382,39 @@ func _request(kind: String, id: Variant) -> void:
 		status = "Unavailable"
 
 func _on_media_list(id: int, payload: String) -> void:
+	if cloud_accounts.receive(id, payload): return
+	# Unsolicited store notifications also work when Quest does not pause/resume VR.
+	if id == 0:
+		var event: Variant = JSON.parse_string(payload)
+		if event is Dictionary and event.get("source") == "medialib" and event.get("state") == "accounts_changed":
+			server_browser.setup = false
+			if section == Section.MEDIA_SERVER:
+				# Let a VR deletion finish its saved-filter cleanup before reloading.
+				if server_browser.pending.values().any(func(request): return request.action == "remove"): return
+				server_browser.load_servers()
+				refresh()
+			return
 	if server_browser.receive(id, payload): return
 	if not _pending.has(id):
 		return
 	var kind: String = _pending[id]
 	_pending.erase(id)
+	if kind == "cloud": _cloud_busy = false
 	if kind == "cloud" and section != Section.CLOUD:
 		return
 	var parsed: Variant = JSON.parse_string(payload)
 	if not parsed is Dictionary:
+		if kind == "cloud":
+			status = "Cloud connection failed"
+			refresh()
 		return
 	var result: Dictionary = parsed
+	if kind == "cloud" and (str(result.get("path", "")) != _cloud_path() or \
+		int(result.get("offset", 0)) != _cloud_offsets[_cloud_requested_page]):
+		# A matching request ID with the wrong page is a protocol failure, not pending work.
+		status = "Cloud connection failed"
+		if visible: refresh()
+		return
 	status = ""
 	var state := str(result.get("state", "error"))
 	if state == "denied":
@@ -376,8 +424,12 @@ func _on_media_list(id: int, payload: String) -> void:
 	else:
 		match kind:
 			"cloud":
-				if str(result.get("path", "")) == _cloud_path():
-					_cloud_entries = result.get("entries", [])
+				_cloud_entries = result.get("entries", [])
+				_cloud_page = _cloud_requested_page
+				_cloud_next = int(result.get("next_offset", -1))
+				_cloud_total = int(result.get("total", -1))
+				_cloud_page_size = maxi(1, int(result.get("page_size", 48)))
+				_reset_navigation()
 			"local":
 				if str(result.get("path", "")) == _local_path():
 					_local_entries = result.get("entries", [])
@@ -406,7 +458,7 @@ func _load_section() -> void:
 		return
 	match section:
 		Section.CLOUD:
-			_request("cloud", platform.media_cloud_browse(_cloud_path(), false))
+			_load_cloud()
 		Section.LOCAL:
 			# Always read again: files change, and access may have just been granted in settings.
 			_request("local", platform.media_local_browse(_local_path()))
@@ -428,6 +480,7 @@ func _rebuild_rows() -> void:
 				var photo: bool = entry.get("kind", "") == "image" or ImageInfo.is_image(str(entry.uri), str(entry.title))
 				rows.append({"title": str(entry.title), "detail": "%02d:%02d" % [seconds / 60, seconds % 60] if seconds > 0 else "",
 					"kind": "image" if photo else "video", "icon": "image" if photo else "video", "uri": str(entry.uri)})
+				if not str(entry.get("cover", "")).is_empty(): rows.back()["cover"] = entry.cover
 		Section.LOCAL:
 			for entry in _local_entries:
 				var row := _entry_row(entry)
@@ -459,6 +512,11 @@ func _rebuild_rows() -> void:
 					var selected: bool = int(settings.get("output_width", 0)) == int(OUTPUT_WIDTHS[i])
 					rows.append({"title": I18n.t(OUTPUT_NAMES[i]), "detail": "", "icon": "check" if selected else "circle",
 						"selected": selected, "setting": ["output_width", OUTPUT_WIDTHS[i]]})
+			elif tab == GENERAL_TAB:
+				for value in I18n.CHOICES:
+					var current: bool = I18n.choice == value
+					rows.append({"title": I18n.t("Language") + " · " + I18n.t(LANGUAGE_NAMES[value]), "detail": "",
+						"icon": "check" if current else "circle", "selected": current, "setting": ["language", value]})
 				# Library pictures: frames of played videos and DLNA covers.
 				if _cache_usage == null:
 					_cache_usage = Thumbnails.usage() # opens every picture file: not on each redraw
@@ -469,6 +527,16 @@ func _rebuild_rows() -> void:
 				var history: bool = settings.get("history", true)
 				rows.append({"title": I18n.t("Save play history"), "detail": "", "icon": "check" if history else "circle",
 					"selected": history, "setting": ["history", not history]})
+			elif tab == DISPLAY_TAB:
+				for i in Quality.SCALES.size():
+					var selected := int(settings.get("display_quality", Quality.DEFAULT)) == i
+					var pending := selected and bool(settings.get("display_quality_pending", false))
+					rows.append({"title": I18n.t("Display quality") + " · " + I18n.t(Quality.NAMES[i]),
+						"detail": I18n.t("Restart to apply") if pending else "", "icon": "check" if selected else "circle", "selected": selected, "setting": ["display_quality", i]})
+				for i in Quality.SHARPNESS.size():
+					var selected := is_equal_approx(float(settings.get("sharpness", Quality.DEFAULT_SHARPNESS)), Quality.SHARPNESS[i])
+					rows.append({"title": I18n.t("Sharpness") + " · " + I18n.t(Quality.SHARPNESS_NAMES[i]),
+						"detail": "", "icon": "check" if selected else "circle", "selected": selected, "setting": ["sharpness", Quality.SHARPNESS[i]]})
 			elif tab == SUBTITLES_TAB:
 				var distance := float(settings.get("subtitle_distance", 5.0))
 				for value in SUBTITLE_DISTANCES:
@@ -488,33 +556,35 @@ func _rebuild_rows() -> void:
 					rows.append({"title": I18n.t("Brightness"), "detail": "%d%%" % int(float(settings.get("background_brightness", 1)) * 100), "icon": "image", "setting": ["background_brightness", true]})
 				status = "Loading…" if settings.get("background_loading", false) else str(settings.get("background_error", ""))
 			elif tab == ABOUT_TAB:
-				if _about_page == 1:
-					for value in I18n.CHOICES:
-						var current: bool = I18n.choice == value
-						rows.append({"title": I18n.t(LANGUAGE_NAMES[value]), "detail": "", "icon": "check" if current else "circle",
-							"selected": current, "setting": ["language", value]})
-				elif _about_page == 2:
+				if _about_page == 2:
 					for credit in [
 						["Belfast Sunset (Pure Sky)", "Poly Haven · CC0 1.0 · Dimitrios Savva / Greg Zaal / Jarod Guest"],
 						["Godot", "MIT"], ["Godot OpenXR Vendors", "Vendor license notices"],
 						["RVM MobileNetV3", "GPL-3.0"], ["MNN", "Apache-2.0"], ["ncnn", "BSD-3-Clause"],
 						["Depth Anything V2 Small", "Apache-2.0"], ["MPV / FFmpeg", "Bundled license notices"],
-						["AndroidX Media3", "Apache-2.0"], ["jcifs-ng", "LGPL-2.1"], ["p115rsacipher", "MIT"]]:
+						["AndroidX Media3", "Apache-2.0"], ["CodeLibs JCIFS", "LGPL-2.1"], ["p115rsacipher", "MIT"]]:
 						rows.append(_about_info(I18n.t(credit[0]), I18n.t(credit[1])))
 				else:
 					rows.append(_about_info("Thru3D Media Player", str(settings.get("version", ""))))
 					rows.append(_about_info("FFSky Studio", "© 2026 FFSky Studio"))
 					rows.append(_about_info(I18n.t("Support"), "ffskyteam@gmail.com"))
-					rows.append(_about_info(I18n.t("Website"), "https://wapok.com"))
-					rows.append({"title": I18n.t("Language"), "icon": "settings", "about_page": 1})
+					rows.append(_about_info(I18n.t("Official website"), "https://wapok.com"))
+					rows.append(_about_info(I18n.t("Source code"), "https://github.com/zerochocobo/Thru3D"))
 					rows.append({"title": I18n.t("Credits"), "icon": "info", "about_page": 2})
 		Section.CLOUD:
-			for entry in _cloud_entries:
-				rows.append(_entry_row(entry))
+			if not cloud_accounts.mode.is_empty(): rows = cloud_accounts.rows()
+			else:
+				for entry in _cloud_entries:
+					rows.append(_entry_row(entry))
 	if section == Section.MEDIA_SERVER:
 		rows = server_browser.rows()
 	if media_filter > 0 and section not in [Section.SETTINGS, Section.MEDIA_SERVER]:
 		rows.assign(rows.filter(func(row): return not row.has("uri") or row.get("kind", "video") == ("image" if media_filter == 2 else "video")))
+	if section == Section.RECENT:
+		_recent_all_rows.assign(rows)
+		_recent_count = rows.size()
+		_recent_page = clampi(_recent_page, 0, _recent_page_count() - 1)
+		rows.assign(_recent_all_rows.slice(_recent_page * RECENT_PAGE_SIZE, (_recent_page + 1) * RECENT_PAGE_SIZE))
 	focus_index = clampi(focus_index, 0, maxi(0, rows.size() - 1))
 	scroll = clampf(scroll, 0.0, _max_scroll())
 
@@ -524,6 +594,49 @@ func _local_path() -> String:
 
 func _cloud_path() -> String:
 	return "" if _cloud_stack.is_empty() else str(_cloud_stack.back().id)
+
+func _cancel_cloud() -> void:
+	for id in _pending.keys():
+		if _pending[id] == "cloud":
+			if PlatformMethods.supports(platform, "media_cloud_cancel"):
+				platform.media_cloud_cancel(int(id))
+			_pending.erase(id)
+	_cloud_busy = false
+
+func _load_cloud(reset: bool = true, force: bool = false, page: int = 0) -> void:
+	_cancel_cloud()
+	if reset:
+		if not _cloud_entries.is_empty() or _cloud_page > 0:
+			_cloud_positions[_cloud_location] = {"page": _cloud_page, "offsets": _cloud_offsets.duplicate()}
+			while _cloud_positions.size() > 32: _cloud_positions.erase(_cloud_positions.keys()[0])
+		_cloud_location = _cloud_path()
+		var saved_page: Dictionary = _cloud_positions.get(_cloud_location, {})
+		_cloud_entries = []
+		_cloud_page = 0
+		_cloud_offsets.assign(saved_page.get("offsets", [0]))
+		page = int(saved_page.get("page", 0))
+		_cloud_next = -1
+		_cloud_total = -1
+	if not platform or page < 0 or page >= _cloud_offsets.size(): return
+	_cloud_requested_page = page
+	_cloud_busy = true
+	if PlatformMethods.supports(platform, "media_cloud_page"):
+		_request("cloud", platform.media_cloud_page(_cloud_path(), _cloud_offsets[page], force))
+	elif page == 0:
+		_request("cloud", platform.media_cloud_browse(_cloud_path(), force))
+	else:
+		status = "Unavailable"
+	if not _pending.values().has("cloud"): _cloud_busy = false
+
+func _turn_cloud_page(step: int) -> void:
+	if _cloud_busy or _cloud_stack.is_empty(): return
+	var page := _cloud_page + step
+	if page < 0 or (step > 0 and _cloud_next < 0): return
+	if step > 0:
+		_cloud_offsets.resize(page + 1)
+		_cloud_offsets[page] = _cloud_next
+	_load_cloud(false, false, page)
+	refresh()
 
 func _entry_row(entry: Dictionary) -> Dictionary:
 	if bool(entry.get("container", false)):
@@ -536,8 +649,22 @@ func _entry_row(entry: Dictionary) -> Dictionary:
 
 func image_queue() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	for row in rows:
+	for row in (_recent_all_rows if section == Section.RECENT and not _recent_all_rows.is_empty() else rows):
 		if row.get("kind") == "image" and row.has("uri"): result.append(row.duplicate(true))
+	return result
+
+## Capture browsing order at selection time; later history updates must not reorder playback.
+## Paged sources include the loaded page only, without fetching across folders or filters.
+func video_queue() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var source: Array = server_browser.entries if section == Section.MEDIA_SERVER else (_recent_all_rows if section == Section.RECENT and not _recent_all_rows.is_empty() else rows)
+	for row in source:
+		var uri := str(row.get("uri", ""))
+		var title := str(row.get("title", ""))
+		if uri.is_empty() or row.get("kind", "") == "image" or ImageInfo.is_image(uri, title): continue
+		if row.get("container", false) or row.has("folder"): continue
+		result.append({"uri": uri, "title": title,
+			"metadata": row.duplicate(true)})
 	return result
 
 func is_image_uri(uri: String) -> bool:
@@ -567,6 +694,7 @@ var _cache_usage: Variant = null   # thumbnail files and bytes, read when the Vi
 ## Video state changes arrive several times a second: redraw only when the Alpha profiles
 ## (current, compiling, cold) shown on the Alpha tab change.
 func _activate(target: int) -> void:
+	if section == Section.CLOUD and cloud_accounts.action(target): return
 	if section == Section.MEDIA_SERVER and server_browser.action(target): return
 	if not _row_target(target) and target != CLEAR_HISTORY:
 		_confirm = ""
@@ -577,10 +705,16 @@ func _activate(target: int) -> void:
 		player_requested.emit()
 	elif target == RECENTER:
 		recenter_requested.emit()
+	elif target == RESTART_APP:
+		setting_changed.emit("restart_app", true)
+	elif target == QUIT_APP:
+		setting_changed.emit("quit_app", true)
 	elif target >= NAV_BASE and target < NAV_BASE + NAV.size():
+		cloud_accounts.reset()
 		server_browser.cancel()
+		_cancel_cloud()
 		section = target - NAV_BASE
-		tab = 0
+		tab = GENERAL_TAB if section == Section.SETTINGS else 0
 		scroll = 0.0
 		status = ""
 		_editor = {}
@@ -601,9 +735,18 @@ func _activate(target: int) -> void:
 		refresh()
 	elif target == REFRESH:
 		_refresh_source()
+	elif target == CLOUD_PREVIOUS:
+		_turn_cloud_page(-1)
+	elif target == CLOUD_NEXT:
+		_turn_cloud_page(1)
+	elif target == RECENT_PREVIOUS:
+		_turn_recent_page(-1)
+	elif target == RECENT_NEXT:
+		_turn_recent_page(1)
 	elif target == ADD:
 		_open_editor({})
 	elif target == CLOUD_ACCOUNTS and platform:
+		_cancel_cloud()
 		_cloud_setup = true
 		platform.media_cloud_accounts()
 	elif target == EDIT:
@@ -638,6 +781,7 @@ func _activate(target: int) -> void:
 		_editor_input(target)
 
 func _choose(row: Dictionary) -> void:
+	if section == Section.CLOUD and cloud_accounts.choose(row): return
 	if row.has("about_page"):
 		_about_page = int(row.about_page)
 		scroll = 0.0
@@ -707,6 +851,9 @@ func _choose(row: Dictionary) -> void:
 		refresh()
 
 func _go_back() -> void:
+	if section == Section.CLOUD and not cloud_accounts.mode.is_empty():
+		cloud_accounts.action(CloudAccountActions.BACK)
+		return
 	scroll = 0.0
 	status = ""
 	if not _editor.is_empty():
@@ -791,7 +938,7 @@ func _refresh_source() -> void:
 	if not platform:
 		return
 	if section == Section.CLOUD:
-		_request("cloud", platform.media_cloud_browse(_cloud_path(), true))
+		_load_cloud(false, true, _cloud_page)
 		refresh()
 		return
 	match section:
@@ -882,10 +1029,18 @@ func _draw() -> void:
 		return
 	# Right header: sub-tabs at the top level, otherwise a clickable path with back.
 	var crumbs := _crumbs()
-	if crumbs.is_empty():
+	var cloud_managing: bool = section == Section.CLOUD and not cloud_accounts.mode.is_empty()
+	if cloud_managing:
+		pass # Account actions draw their own title and back target below.
+	elif crumbs.is_empty():
 		var tabs: Array = SETTING_TABS if section == Section.SETTINGS else []
-		for i in tabs.size():
-			_button(TAB_BASE + i, I18n.t(tabs[i]), Vector2(-0.37 + i * 0.25, 0.46), Vector2(0.23, 0.07))
+		if section == Section.SETTINGS and tab == ABOUT_TAB and _about_page != 0:
+			tabs = []
+			_label(I18n.t("Credits"), Vector3(0.13, 0.46, 0.004), 24)
+		for position in tabs.size():
+			var i: int = SETTING_ORDER[position]
+			_button(TAB_BASE + i, I18n.t(tabs[i]), Vector2(-0.40 + position * 0.225, 0.46), Vector2(0.21, 0.07))
+			(_buttons.back().node.get_child(0) as Label3D).font_size = 18
 			_lit(i == tab)
 		if section in [Section.RECENT, Section.LOCAL, Section.SMB, Section.DLNA, Section.CLOUD]:
 			var title := _label(I18n.t(NAV[section]), Vector3(-0.42, 0.46, 0.004), 24)
@@ -893,11 +1048,13 @@ func _draw() -> void:
 	else:
 		_button(BACK, "", Vector2(-0.52, 0.46), Vector2(0.09, 0.07), true, "up")
 		_draw_crumbs(crumbs)
-	if section in [Section.LOCAL, Section.SMB, Section.DLNA, Section.CLOUD]:
+	if section in [Section.LOCAL, Section.SMB, Section.DLNA, Section.CLOUD] and not cloud_managing:
 		_button(REFRESH, "", Vector2(0.80, 0.46), Vector2(0.09, 0.07), platform != null, "refresh")
 	if section == Section.CLOUD:
-		_button(CLOUD_ACCOUNTS, "", Vector2(0.69, 0.46), Vector2(0.09, 0.07), platform != null, "plus")
-		_tips[CLOUD_ACCOUNTS] = I18n.t("Cloud accounts")
+		cloud_accounts.draw()
+		if not cloud_managing:
+			_button(CLOUD_ACCOUNTS, "", Vector2(0.69, 0.46), Vector2(0.09, 0.07), platform != null, "plus")
+			_tips[CLOUD_ACCOUNTS] = I18n.t("Cloud accounts")
 	if section == Section.LOCAL and not _local_all_files and platform:
 		_button(ALL_FILES, "", Vector2(0.69, 0.46), Vector2(0.09, 0.07), true, "unlock")
 		_tips[ALL_FILES] = I18n.t("Allow access to all files")
@@ -914,20 +1071,34 @@ func _draw() -> void:
 	_draw_rows()
 	if section == Section.SETTINGS and tab == ABOUT_TAB:
 		_draw_about()
+	if section == Section.SETTINGS:
+		_button(RESTART_APP, I18n.t("Restart app"), Vector2(0.10, -0.515), Vector2(0.42, 0.07), true, "refresh")
+		_button(QUIT_APP, I18n.t("Close app"), Vector2(0.59, -0.515), Vector2(0.42, 0.07), true, "close")
 	if status in ["Video access needed", "Media access needed", "All files access needed"]:
 		_button(GRANT, I18n.t("Grant"), Vector2(0.19, -0.34), Vector2(0.3, 0.07), true, "", true)
-	if section != Section.SETTINGS:
+	if section != Section.SETTINGS and not cloud_managing:
 		for i in MEDIA_FILTERS.size():
 			_button(FILTER_BASE + i, I18n.t(MEDIA_FILTERS[i]), Vector2(0.36 + i * 0.18, -0.515), Vector2(0.17, 0.06), true, "", media_filter == i)
 			(_buttons.back().node.get_child(0) as Label3D).font_size = 17
-	var line := _label(_fit_title(I18n.t(status), "", 0.67, 17), Vector3(-0.45, -0.52, 0.004), 17)
+	var cloud_paging := section == Section.CLOUD and not _cloud_stack.is_empty()
+	if section == Section.RECENT:
+		_button(RECENT_PREVIOUS, "‹", Vector2(-0.45, -0.515), Vector2(0.09, 0.07), _recent_page > 0)
+		_label("%d / %d" % [_recent_page + 1, _recent_page_count()], Vector3(-0.27, -0.515, 0.004), 18)
+		_button(RECENT_NEXT, "›", Vector2(-0.09, -0.515), Vector2(0.09, 0.07), _recent_page + 1 < _recent_page_count())
+	if cloud_paging:
+		_button(CLOUD_PREVIOUS, "‹", Vector2(-0.45, -0.515), Vector2(0.09, 0.07), not _cloud_busy and _cloud_page > 0)
+		var pages := str(maxi(_cloud_page + 1, maxi(1, ceili(float(_cloud_total) / _cloud_page_size)))) if _cloud_total >= 0 else ("…" if _cloud_next >= 0 else str(_cloud_page + 1))
+		_label("%d / %s" % [_cloud_page + 1, pages], Vector3(-0.27, -0.515, 0.004), 18)
+		_button(CLOUD_NEXT, "›", Vector2(-0.09, -0.515), Vector2(0.09, 0.07), not _cloud_busy and _cloud_next >= 0)
+	var line := _label(_fit_title(I18n.t(status), "", 0.67, 17), Vector3(-0.45, -0.58 if cloud_paging else -0.52, 0.004), 17)
 	line.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	line.modulate = MUTED
 
 ## Path pills (last four segments); every segment but the current one jumps there.
 func _draw_crumbs(crumbs: Array) -> void:
 	var x := -0.455
-	var first := maxi(0, crumbs.size() - 4)
+	# Leave room for account actions; the up button still exposes every parent.
+	var first := maxi(0, crumbs.size() - (2 if section == Section.CLOUD else 4))
 	for i in range(first, crumbs.size()):
 		var text := _fit_title(str(crumbs[i]), "", 0.24, 19)
 		var width := FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19).x * 0.0012 + 0.05
@@ -1044,14 +1215,26 @@ func _lit(selected: bool) -> void:
 ## A played video's frame, or the cover a DLNA server offers (fetched once, then cached).
 ## Never reads a video to make one.
 func _picture(row: Dictionary) -> Texture2D:
-	if row.has("scene"): return server_browser.cover(row)
+	if row.has("scene"):
+		var server_picture: Texture2D = server_browser.cover(row)
+		return server_picture if server_picture else Thumbnails.texture(str(row.get("uri", "")))
 	var cover := str(row.get("cover", ""))
+	var played := Thumbnails.texture(str(row.get("uri", "")))
 	if cover.is_empty():
-		return Thumbnails.texture(str(row.get("uri", "")))
+		return played
 	var cached := Thumbnails.texture(cover)
+	if cached:
+		_cache_cover_for_rows(cover, cached.get_image() if not played else null)
 	if not cached and not _covers.has(cover) and _covers.size() < 4:
 		_fetch_cover(cover)
-	return cached
+	return cached if cached else played
+
+func _cache_cover_for_rows(cover: String, image: Image) -> void:
+	for row in rows:
+		if row.get("cover", "") != cover or str(row.get("uri", "")).is_empty(): continue
+		var uri := str(row.uri)
+		if image and not Thumbnails.has(uri): Thumbnails.store(uri, image)
+		if catalog and catalog.has_method("set_cover") and catalog.set_cover(uri, cover): catalog.save()
 
 func _fetch_cover(url: String) -> void:
 	var request := HTTPRequest.new()
@@ -1067,8 +1250,9 @@ func _fetch_cover(url: String) -> void:
 		var image := Image.new()
 		if image.load_jpg_from_buffer(body) != OK and image.load_png_from_buffer(body) != OK and image.load_webp_from_buffer(body) != OK:
 			return
-		if Thumbnails.store(url, image) and visible:
-			_draw())
+		if Thumbnails.store(url, image):
+			_cache_cover_for_rows(url, image)
+			if visible: _draw())
 	if request.request(url) != OK:
 		_covers.erase(url)
 		request.queue_free()
@@ -1078,6 +1262,16 @@ func _cancel_covers() -> void:
 		request.cancel_request()
 		request.queue_free()
 	_covers.clear()
+
+func _recent_page_count() -> int:
+	return maxi(1, ceili(float(_recent_count) / RECENT_PAGE_SIZE))
+
+func _turn_recent_page(step: int) -> void:
+	_recent_page = clampi(_recent_page + step, 0, _recent_page_count() - 1)
+	scroll = 0.0
+	_drag = {}
+	_fling = 0.0
+	refresh()
 
 func _row_button(target: int, title: String, detail: String, icon: String, centre: Vector2, selected: bool) -> void:
 	_button(target, _fit_title(title, "", 0.9, 22), centre, Vector2(1.24, 0.098), true, "", false, _list)

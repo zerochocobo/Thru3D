@@ -18,6 +18,13 @@ uniform float depth_convergence = 0.35;
 // mask is part of the color image itself; no model runs. packed_size is in the include.
 uniform bool packed_alpha = false;
 #include "res://shaders/video_coordinates.gdshaderinc"
+#include "res://shaders/sharpness.gdshaderinc"
+
+vec3 clarity_sample(vec2 p, vec2 lo, vec2 hi, vec3 center) {
+	vec2 q = clamp(p, lo, hi);
+	if (packed_alpha && reserved_color(q)) { return center; }
+	return texture(color_texture, q).rgb;
+}
 
 vec2 raw_eye_uv(vec2 displayed_uv) {
 	vec2 p = displayed_uv;
@@ -88,6 +95,17 @@ void fragment() {
 	if (stereo_sbs && top_bottom) { color_p.y = (color_p.y + float(eye)) * 0.5; }
 	else if (stereo_sbs) { color_p.x = (color_p.x + float(eye)) * 0.5; }
 	vec3 rgb = texture(color_texture, color_p).rgb;
+	if (sharpness > 0.0) {
+		vec2 lo = vec2(0.5) / source_size;
+		vec2 hi = vec2(1.0) - lo;
+		if (stereo_sbs && top_bottom) { lo.y += float(eye) * 0.5; hi.y -= float(1 - eye) * 0.5; }
+		else if (stereo_sbs) { lo.x += float(eye) * 0.5; hi.x -= float(1 - eye) * 0.5; }
+		vec2 step_uv = max(vec2(1.0) / source_size, fwidth(color_p));
+		rgb = sharpen_rgb(rgb, clarity_sample(color_p + vec2(0.0, step_uv.y), lo, hi, rgb),
+			clarity_sample(color_p - vec2(0.0, step_uv.y), lo, hi, rgb),
+			clarity_sample(color_p + vec2(step_uv.x, 0.0), lo, hi, rgb),
+			clarity_sample(color_p - vec2(step_uv.x, 0.0), lo, hi, rgb));
+	}
 	// The model input contains letterbox padding. Read only centers inside content,
 	// then clamp within this eye before packing; never interpolate across the seam.
 	vec2 first_center = (ceil(model_content_rect.xy * model_size - vec2(0.5)) + vec2(0.5)) / model_size;

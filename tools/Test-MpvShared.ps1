@@ -1,4 +1,4 @@
-param([string]$Serial = '2G0YC5ZF7V0664', [switch]$Hardware, [switch]$Install,
+param([Parameter(Mandatory=$true)][string]$Serial, [switch]$Hardware, [switch]$Install,
     [ValidateSet('Shared','Audio')][string]$Diagnostic = 'Shared')
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot

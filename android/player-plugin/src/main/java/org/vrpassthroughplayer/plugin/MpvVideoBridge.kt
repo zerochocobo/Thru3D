@@ -12,6 +12,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Production MPV -> shared GPU color -> immutable RVM inputs -> complete display
  * pairs. Native MPV survives mode/layout/seek generations; old display claims
@@ -34,6 +35,8 @@ internal class MpvVideoBridge(
     private val hosts = ConcurrentHashMap.newKeySet<Host>()
     @Volatile private var foreground = true
     @Volatile private var stopped = false
+    private val freezePending = AtomicBoolean(false)
+    private val frozenFrames = ConcurrentHashMap<Long, AtomicInteger>()
     @Volatile private var debugNormalFastPath = true
     internal fun debugNormalFramePath(enabled: Boolean) { if (BuildConfig.DEBUG) debugNormalFastPath = enabled }
     @Volatile private var debugFrameCapOverride = -1
@@ -332,12 +335,18 @@ internal class MpvVideoBridge(
                 finishCopy(session)
                 if (!session.inference && session.normalFastPath) finishUploads(session)
                 if (session.copying != null) return@synchronized
-                val source = session.pendingSource ?: MpvSourceNative.acquire(session.host.handle)
-                    .takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
-                session.pendingSource = null
-                if (source != null && !capture(session, source)) {
-                    session.pendingSource = source
-                    session.deferredCopies++
+                // Open/revise starts MPV paused until Godot displays the first complete pair.
+                // Taking that frame before RVM is ready drops it in drain(); paused MPV then
+                // has no new frame to offer and the Alpha transition never completes.
+                val effectReady = !session.alpha || session.model?.isReady() == true
+                if (effectReady) {
+                    val source = session.pendingSource ?: MpvSourceNative.acquire(session.host.handle)
+                        .takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+                    session.pendingSource = null
+                    if (source != null && !capture(session, source)) {
+                        session.pendingSource = source
+                        session.deferredCopies++
+                    }
                 }
                 if (System.nanoTime() >= session.host.nextStatusNs) {
                     session.host.nextStatusNs = System.nanoTime()+250_000_000L
@@ -362,6 +371,7 @@ internal class MpvVideoBridge(
                         .put("captured_frames", session.captured)
                         .put("display_claims", session.display.heldClaims()).put("post_draw_frames", session.ownerDraws)
                         .put("unique_post_draw_frames", session.uniquePostDrawFrames).put("rvm_model_created", session.model != null)
+                        .put("rvm_model_ready", session.model?.isReady() == true)
                         .put("producer_copy_deferred", session.deferredCopies).put("producer_copy_pending", session.pendingSource != null)
                         .put("eof_pair_post_draw", session.end.complete()).put("eof_presented_slot", session.end.completedSlot())
                         .put("audio_focus", audioFocusState))
@@ -565,6 +575,58 @@ internal class MpvVideoBridge(
         next?.let { emit("mpv_pair_available", session.id, it) }
         return claimed
     }
+    /** Capture on a real owner draw callback, while the original display claim is pinned.
+     * Its returned copy outlives the old processing session, without a decoder lease. */
+    fun freeze(id: Int, token: Long, request: Int): Boolean {
+        val session = sessions[id] ?: return false
+        if (request <= 0 || !freezePending.compareAndSet(false, true)) return false
+        synchronized(session.lock) {
+            if (!active(session) || !session.display.pin(token)) { freezePending.set(false); return false }
+        }
+        try {
+            render(Runnable { synchronized(session.lock) {
+                val report = JSONObject().put("request_id", request).put("slot_token", token)
+                try {
+                    check(active(session)) { "Freeze source no longer active" }
+                    val pair = JSONObject(session.pairs.getValue(token).toString())
+                    val warp = pair.optInt("warp_texture_id") > 0 && !pair.getBoolean("stereo_sbs")
+                    val copy = RenderBridgeNative.freezePair(session.renderer, token, warp)
+                    frozenFrames[copy[0]] = AtomicInteger(1)
+                    pair.put("frozen_frame_id", copy[0]).put("freeze_copy_us", copy[5])
+                        .put("color_target", "texture").put("color_texture_id", copy[1])
+                        .put("alpha_texture_id", copy[2]).put("color_egl_image", "0")
+                        .put("warp_texture_id", if (warp) copy[1] else 0)
+                    report.put("pair", pair).put("state", "ready")
+                } catch (failure: Throwable) {
+                    report.put("state", "failed").put("error", failure.message)
+                } finally {
+                    session.display.unpin(token); freezePending.set(false)
+                    release(session, token)
+                }
+                emit("mpv_frozen_pair", session.id, report.toString())
+            } })
+            return true
+        } catch (_: Throwable) {
+            synchronized(session.lock) { session.display.unpin(token) }
+            freezePending.set(false)
+            return false
+        }
+    }
+    fun releaseFrozen(id: Long) {
+        if (id <= 0) return
+        render(Runnable {
+            val refs = frozenFrames[id] ?: return@Runnable
+            if (refs.decrementAndGet() == 0 && frozenFrames.remove(id, refs)) RenderBridgeNative.releaseFrozen(id)
+        })
+    }
+    fun retainFrozen(id: Long): Boolean {
+        val refs = frozenFrames[id] ?: return false
+        while (true) {
+            val count = refs.get()
+            if (count <= 0) return false
+            if (refs.compareAndSet(count, count + 1)) return true
+        }
+    }
     fun acknowledge(id: Int, token: Long): Boolean {
         val session = sessions[id] ?: return false
         synchronized(session.lock) {
@@ -633,6 +695,13 @@ internal class MpvVideoBridge(
     }
     fun unpinPixelPair(id: Int, token: Long): Boolean {
         if (!BuildConfig.DEBUG) return false
+        return unpinPair(id, token)
+    }
+    fun pinPair(id: Int, token: Long): Boolean {
+        val session = sessions[id] ?: return false
+        synchronized(session.lock) { return active(session) && session.display.pin(token) }
+    }
+    fun unpinPair(id: Int, token: Long): Boolean {
         val session = sessions[id] ?: return false
         synchronized(session.lock) { if (!session.display.unpin(token)) return false }
         release(session, token)
@@ -694,6 +763,7 @@ internal class MpvVideoBridge(
     }
     fun resume() { foreground = true; refreshPlayback() }
     fun contextCreated() {
+        frozenFrames.keys.toList().forEach { RenderBridgeNative.releaseFrozen(it); frozenFrames.remove(it) }
         // A real recreated context invalidates the complete pipeline. Initial
         // creation has no sessions; UI can reopen the same authorized URI.
         sessions.values.forEach { fail(it, "MPV_GL_CONTEXT_RECREATED", IllegalStateException("Owner context recreated")) }

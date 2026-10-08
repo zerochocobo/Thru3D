@@ -23,4 +23,4 @@ class QuestPlayerExport extends EditorExportPlugin:
 
 	func _get_android_dependencies(_platform: EditorExportPlatform, _debug: bool) -> PackedStringArray:
 		# AAR library dependencies are resolved by the exported Godot Gradle app.
-		return PackedStringArray(["androidx.media3:media3-exoplayer:1.10.1", "eu.agno3.jcifs:jcifs-ng:2.1.10"])
+		return PackedStringArray(["androidx.media3:media3-exoplayer:1.10.1", "org.codelibs:jcifs:3.0.4"])

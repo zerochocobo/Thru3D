@@ -267,7 +267,7 @@ func action(target: int) -> bool:
 				elif view == "scenes": load_servers()
 				elif view == "candidates": cancel(); view = "filters"
 				else: browse()
-			1: setup = true; cancel(); menu.platform.media_server_accounts()
+			1, 14: setup = true; cancel(); menu.platform.media_server_accounts()
 			2: keyboard = "search"; text = candidate_q if view == "candidates" else str(query.get("q", ""))
 			3: cancel(); view = "filters"; menu._reset_navigation()
 			4:
@@ -283,7 +283,10 @@ func action(target: int) -> bool:
 			9: keyboard = "save"; text = ""
 			10: cancel(); view = "saved"; menu._reset_navigation()
 			11: browse()
-			12: browse(false)
+			12:
+				if busy: return true
+				if view == "servers": load_servers()
+				else: browse(false)
 			13: cancel(); view = "remove_servers"; menu._reset_navigation()
 	menu.refresh()
 	return true
@@ -344,6 +347,9 @@ func draw() -> void:
 			(menu._buttons.back().node.get_child(0) as Label3D).font_size = 16
 	menu._button(ACTION + 1, "", Vector2(0.79, 0.46), Vector2(0.09, 0.07), menu.platform != null, "plus" if view == "servers" else "edit")
 	if view == "servers":
+		menu._button(ACTION + 14, "", Vector2(0.43, 0.46), Vector2(0.09, 0.07), menu.platform != null and not servers.is_empty(), "edit")
+		menu._tips[ACTION + 14] = I18n.t("Edit")
+		menu._button(ACTION + 12, "", Vector2(0.55, 0.46), Vector2(0.09, 0.07), not busy and menu.platform != null, "refresh")
 		menu._button(ACTION + 13, "", Vector2(0.67, 0.46), Vector2(0.09, 0.07), not servers.is_empty(), "trash")
 		menu._tips[ACTION + 13] = I18n.t("Remove server")
 	if view == "candidates":

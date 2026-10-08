@@ -12,6 +12,7 @@ internal object CloudLibrary {
     private var initialized = false
     val providers = CloudDrive.PROVIDERS
     private val activeStreams = HashMap<String, MutableList<Pair<LocalStreamServer, String>>>()
+    private val metadata = HashMap<String, CloudMetadata>()
 
     @Synchronized fun start(context: Context) {
         if (initialized) return
@@ -31,13 +32,19 @@ internal object CloudLibrary {
     @Synchronized private fun credentials(id: String): JSONObject = (0 until saved.length())
         .map { saved.getJSONObject(it) }.firstOrNull { it.getString("id") == id }
         ?.let { JSONObject(it.toString()) } ?: throw CloudFailure("cloud_login_required")
-    private fun drive(account: JSONObject) = CloudDrive(account.getString("provider"), account.getString("cookie"))
+    @Synchronized private fun drive(account: JSONObject, http: CloudTransport = CloudHttp): CloudDrive {
+        if (credentials(account.getString("id")).getString("cookie") != account.getString("cookie"))
+            throw CloudFailure("cloud_login_required")
+        val cache = metadata.getOrPut(account.getString("id")) { CloudMetadata() }
+        return CloudDrive(account.getString("provider"), account.getString("cookie"), http, cache)
+    }
 
     fun connect(provider: String, name: String, cookie: String, id: String? = null) = safe {
         require(provider in providers && name.isNotBlank() && CloudHttp.validCookie(cookie))
         val account = JSONObject().put("id", id ?: UUID.randomUUID().toString()).put("provider", provider)
             .put("name", name.trim().take(80)).put("cookie", cookie)
-        drive(account).list("/")
+        // Validate the session with a single page, even when the root contains many files.
+        CloudDrive(provider, cookie).page("/")
         synchronized(this) {
             if (id != null && credentials(id).getString("provider") != provider) throw CloudFailure()
             val updated = JSONArray()
@@ -46,20 +53,35 @@ internal object CloudLibrary {
             store.save(updated); saved = updated
             if (id != null) revoke(id)
         }
+        CloudAccountChanges.emit()
     }
-    @Synchronized fun remove(id: String) = safe {
-        val updated = JSONArray()
-        for (i in 0 until saved.length()) if (saved.getJSONObject(i).getString("id") != id) updated.put(saved.getJSONObject(i))
-        store.save(updated); saved = updated; revoke(id)
+    fun rename(id: String, name: String) = safe {
+        synchronized(this) {
+            val updated = CloudAccountChanges.renamed(saved, id, name)
+            store.save(updated); saved = updated
+        }
+        CloudAccountChanges.emit()
+    }
+    fun remove(id: String) = safe {
+        synchronized(this) {
+            credentials(id)
+            val updated = JSONArray()
+            for (i in 0 until saved.length()) if (saved.getJSONObject(i).getString("id") != id) updated.put(saved.getJSONObject(i))
+            store.save(updated); saved = updated; revoke(id)
+        }
+        CloudAccountChanges.emit()
     }
     private fun revoke(id: String, disconnectDav: Boolean = true) {
+        if (disconnectDav) metadata.remove(id)
         activeStreams.remove(id)?.forEach { (server, url) -> server.revoke(url) }
         if (disconnectDav) CloudWebDav.disconnectClients()
     }
     @Synchronized fun stopStreams() { activeStreams.keys.toList().forEach { revoke(it, false) } }
 
-    fun browse(path: String, @Suppress("UNUSED_PARAMETER") refresh: Boolean): JSONObject = safe {
+    fun browse(path: String, refresh: Boolean, offset: Int = 0, http: CloudTransport = CloudHttp): JSONObject = safe {
         val entries = JSONArray()
+        var nextOffset = -1
+        var total = -1
         if (path.isEmpty() || path == "/") {
             val accounts = accounts()
             for (i in 0 until accounts.length()) {
@@ -68,15 +90,20 @@ internal object CloudLibrary {
             }
         } else {
             val (id, remote) = split(path)
-            val files = drive(credentials(id)).list(remote)
-            for (file in files) {
+            val account = credentials(id)
+            val page = drive(account, http).page(remote, offset, refresh)
+            if (credentials(id).getString("cookie") != account.getString("cookie")) throw CloudFailure("cloud_login_required")
+            nextOffset = page.nextOffset
+            total = page.total
+            for (file in page.files) {
                 if (!file.folder && !MediaKinds.supported(file.name)) continue
                 val child = CloudPaths.child(path, file.name)
                 entries.put(JSONObject().put("id", child).put("title", file.name).put("container", file.folder)
                     .put("size", file.size).apply { if (!file.folder) put("uri", CloudPaths.uri(child)).put("kind", MediaKinds.kind(file.name)) })
             }
         }
-        JSONObject().put("path", path).put("entries", entries)
+        JSONObject().put("path", path).put("offset", offset).put("next_offset", nextOffset)
+            .put("total", total).put("page_size", CloudDrive.PAGE_SIZE).put("entries", entries)
     }
     fun playable(uri: String, server: LocalStreamServer): String = safe {
         val (id, remote) = split(CloudPaths.path(uri))

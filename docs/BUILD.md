@@ -13,7 +13,7 @@ $env:GODOT_EXE = (Get-Command godot).Source
 
 ## Pinned toolchain
 
-The versions/hashes used by this source snapshot are in `tools/environment/toolchain.lock.json`, the Gradle wrapper, and third-party source locks. The application build checks Godot `4.7.2.stable.official.ed1daf0bf`; use its corresponding Android templates and Godot OpenXR Vendors `5.1.0`. Android plugin configuration uses Java 17, SDK 36, build-tools 36.1.0, NDK 29.0.14206865 and CMake 3.31.6. The separately built mpv dependency uses its own locked Linux NDK r30. Do not silently mix these toolchains.
+The versions/hashes used by this source snapshot are in `tools/environment/toolchain.lock.json`, the Gradle wrapper, and third-party source locks. The application build checks Godot `4.7.2.stable.official.ed1daf0bf`; use its corresponding Android templates and Godot OpenXR Vendors `5.1.0`. Android plugin configuration uses Java 17, compile SDK 36, build-tools 36.1.0, NDK 29.0.14206865 and CMake 3.31.6. The 0.2.1 Quest export uses min SDK 32 / target SDK 34; PICO and experimental standard OpenXR use 29 / 36. The separately built mpv dependency uses its own locked Linux NDK r30. Do not silently mix these toolchains.
 
 Set your own paths:
 
@@ -68,6 +68,7 @@ Obtain the matching runtime models separately as explained in [MODELS.md](MODELS
 ./tools/Import-ModelAssets.ps1 -FromDirectory ./external-model-assets
 ./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor Quest -BuildType Debug
 ./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor Pico -BuildType Debug
+./tools/Build-Player.ps1 -ToolRoot $env:THRU3D_TOOL_ROOT -UsePreparedModelAssets -XrVendor OpenXR -BuildType Debug
 ```
 
 The build creates/validates the Kotlin plugin AARs, imports/exports Godot, checks manifest/vendor settings, ELF/JNI linkage, model hashes, signing and 16 KiB packaging. These are build checks, not a headset playback acceptance test.

@@ -3,6 +3,7 @@ render_mode unshaded, cull_disabled, depth_draw_never, blend_mix;
 uniform sampler2D photo_texture : source_color, filter_linear_mipmap, repeat_disable;
 uniform sampler2D depth_texture : filter_linear, repeat_disable;
 #include "res://shaders/video_coordinates.gdshaderinc"
+#include "res://shaders/sharpness.gdshaderinc"
 uniform vec2 crop_center = vec2(0.5);
 uniform float content_zoom = 1.0;
 uniform vec4 pano_rect = vec4(0.0, 0.0, 1.0, 1.0);
@@ -35,6 +36,14 @@ void fragment() {
 	if (video_geometry == 3 && !stereo_sbs) { shown = (shown - pano_rect.xy) / pano_rect.zw; }
 	bool outside = any(lessThan(shown, vec2(0.0))) || any(greaterThan(shown, vec2(1.0))) || outside_lens(direction);
 	vec4 color = texture(photo_texture, color_uv(shown));
+	if (sharpness > 0.0) {
+		vec2 step_uv = max(vec2(1.0) / view_size(), fwidth(shown));
+		color.rgb = sharpen_rgb(color.rgb,
+			texture(photo_texture, color_uv(shown + vec2(0.0, step_uv.y))).rgb,
+			texture(photo_texture, color_uv(shown - vec2(0.0, step_uv.y))).rgb,
+			texture(photo_texture, color_uv(shown + vec2(step_uv.x, 0.0))).rgb,
+			texture(photo_texture, color_uv(shown - vec2(step_uv.x, 0.0))).rgb);
+	}
 	ALBEDO = outside ? vec3(0.0) : color.rgb;
 	ALPHA = outside ? 1.0 : color.a;
 }

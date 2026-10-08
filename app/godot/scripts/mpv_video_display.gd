@@ -1,6 +1,7 @@
 ﻿extends "res://scripts/media_surface.gd"
 
 signal changed
+signal thumbnail_ready(uri: String)
 
 const State := preload("res://scripts/mpv_media_state.gd")
 const Thumbnails := preload("res://scripts/thumbnail_cache.gd")
@@ -11,6 +12,14 @@ const PixelProbe := preload("res://scripts/mpv_pixel_probe.gd")
 const SubtitleState := preload("res://scripts/mpv_subtitle_state.gd")
 const ModeMemory := preload("res://scripts/file_mode_memory.gd")
 const RecentFiles := preload("res://scripts/recent_files.gd")
+const BookmarkStore := preload("res://scripts/bookmark_store.gd")
+var bookmark_store := BookmarkStore.new()
+var _bookmark_metadata: Dictionary = {}
+var _bookmark_media_id := ""
+var _bookmark_scope_sequence := 0
+var _bookmark_cache_revision := -1
+var _bookmark_rows: Array = []
+var bookmark_last_added: Dictionary = {}
 const Naming := preload("res://scripts/media_naming.gd")
 const AUTOMATIC_PROFILE := "320x320"
 const PROFILES := ["320x320", "384x216", "512x288", "384x384", "512x512", "256x144", "256x256"]
@@ -90,6 +99,14 @@ var _fixture := -1
 var _recover := false
 var _recover_ms := 0
 var _waiting_first := false
+var _thumbnail_busy := false
+var _thumbnail_sequence := 0
+var _thumbnail_result: Dictionary = {}
+var _library_cover := ""
+var _freeze_sequence := 0
+var _freeze_request := 0
+var _seek_trace: Array[Dictionary] = []
+var _debug_seek_delay_until_ms := 0
 var _debug_request := 0
 var _debug_commands: Array = []
 var _debug_pairs: Array = []
@@ -128,6 +145,7 @@ func _ready() -> void:
 		platform.connect("mpv_released", _on_released)
 		platform.connect("mpv_debug_command", _on_debug_command)
 		platform.connect("mpv_pixel_mask", _on_pixel_mask)
+		platform.connect("mpv_frozen_pair", _on_frozen_pair)
 		if platform.has_signal("rvm_warmup"):
 			platform.connect("rvm_warmup", _on_rvm_warmup)
 	_warm_rvm()
@@ -143,32 +161,45 @@ func _warm_rvm() -> void:
 		Engine.get_singleton("QuestPlayer").warm_rvm(profile)
 
 ## The RVM model changed: warm it and reopen an Alpha session so it takes effect now.
-## Library picture of a played local or SMB video: one frame of the displayed picture once
-## playback reaches a tenth of the video (5 s .. 2 min). Never read from the file itself.
-var _thumb_after_ms := -1          # position to capture at; 0: wanted, at a tenth; -1: not wanted
+## First usable displayed source frame, for every stable library URI. No second video decoder.
+var _thumb_after_ms := -1          # media position to try; -1: already cached/not wanted
 var _thumb_tries := 0
 
 static func _thumbnail_source(uri: String) -> bool:
-	return uri.begins_with("file:") or uri.begins_with("content:") or uri.begins_with("smb:")
+	return not ModeMemory.key_for(uri).is_empty()
 
 func _maybe_capture_thumbnail() -> void:
-	if _thumb_after_ms < 0 or media.state != "playing" or not _binding.material or media.last_pair.is_empty():
+	if _thumb_after_ms < 0 or _thumbnail_busy or _pixel_busy or _waiting_first or not _pending_revision.is_empty() \
+		or media.state not in ["playing", "paused", "ended"] or not _binding.material or media.last_pair.is_empty():
 		return
-	var due := _thumb_after_ms
-	if due == 0:
-		due = clampi(control.duration_ms / 10, 5000, 120000) if control.duration_ms > 0 else 15000
-	if int(media.last_pair.get("pts_us", 0)) / 1000 < due:
+	if int(media.last_pair.get("pts_us", 0)) / 1000 < _thumb_after_ms:
 		return
 	var uri := local_uri
-	var pair: Dictionary = _binding.ticket
+	var sequence := _thumbnail_sequence
+	var pair := media.last_pair.duplicate(true)
+	if not platform.pin_mpv_pair(int(pair.session_id), int(pair.slot_token)): return
+	_thumbnail_busy = true
 	_thumb_after_ms = -1
-	var stereo := bool(pair.get("stereo_sbs", false))
+	# Own wrappers/ExternalTexture, so a close cannot detach/rebind our readback source.
+	var binding := Binding.new()
+	var target := ShaderMaterial.new()
+	if not binding.bind(target, pair):
+		platform.release_mpv_pair_pin(int(pair.session_id), int(pair.slot_token))
+		_thumbnail_busy = false
+		return
+	var stereo := bool(pair.get("stereo_sbs", false)) or binding.warped
 	var tb := stereo and bool(pair.get("top_bottom", false))
-	var eye := Vector2(float(pair.width) * (0.5 if stereo and not tb else 1.0), float(pair.height) * (0.5 if tb else 1.0))
+	var eye := Vector2(float(pair.width) * (2.0 if binding.warped else 1.0) * (0.5 if stereo and not tb else 1.0), float(pair.height) * (0.5 if tb else 1.0))
 	var scale: Array = pair.get("color_uv_scale", [1.0, 1.0])
-	var image: Image = await Thumbnails.capture(self, _binding.color_texture(), str(pair.get("color_target", "")) == "external",
+	var image: Image = await Thumbnails.capture(self, binding.color_texture(), str(binding.ticket.get("color_target", "")) == "external",
 		stereo, Thumbnails.crop_for(geometry, eye), Vector2(float(scale[0]), float(scale[1])), tb)
-	if uri != local_uri or not image or image.is_empty():
+	binding.unbind()
+	platform.release_mpv_pair_pin(int(pair.session_id), int(pair.slot_token))
+	_thumbnail_busy = false
+	if sequence != _thumbnail_sequence or uri != local_uri: return
+	if not image or image.is_empty():
+		_thumbnail_result = {"state": "capture_failed"}
+		_thumb_after_ms = int(pair.pts_us) / 1000 + 2000
 		return
 	# A fade or a black opening says nothing about the video: try again a little later.
 	var small := image.duplicate() as Image
@@ -179,9 +210,13 @@ func _maybe_capture_thumbnail() -> void:
 			light += small.get_pixel(x, y).get_luminance()
 	_thumb_tries += 1
 	if light / 144.0 < 0.06 and _thumb_tries < 3:
-		_thumb_after_ms = int(pair.pts_us) / 1000 + 10000
+		_thumb_after_ms = int(pair.pts_us) / 1000 + 2000
 		return
-	Thumbnails.store(uri, image)
+	var stored := Thumbnails.store(uri, image)
+	_thumbnail_result = {"state": "stored" if stored else "store_failed", "pts_us": int(pair.pts_us),
+		"width": image.get_width(), "height": image.get_height(), "source_epoch": int(pair.source_epoch)}
+	if stored: thumbnail_ready.emit(uri)
+	_write_debug_report()
 
 ## Profiles compiling right now (any model), from the warmup reports.
 var warming := {}
@@ -227,7 +262,7 @@ func _on_selected(payload: String) -> void:
 		_picker_request = 0
 		requested_play = true
 		var uri := str(result.uri)
-		if open_local(uri, str(result.get("display_name", "Local video")), _resume(uri)):
+		if open_local(uri, str(result.get("display_name", "Local video")), _resume(uri), true, false, "", {"basename": result.get("display_name", "")}):
 			_file_permission_persisted = bool(result.get("persisted_permission", false))
 	elif result.get("state") == "error":
 		_picker_request = 0
@@ -253,24 +288,29 @@ func cancel_pending_open() -> void:
 # Library selection: MediaStore content URIs are readable through the media permission;
 # network URIs (smb://, DLNA http) have no document grant to check.
 func open_library(uri: String, title: String, metadata: Dictionary = {}) -> bool:
+	var cover := str(metadata.get("cover", recent_files.lookup(uri).get("cover", "")))
+	var opened := false
 	if uri.begins_with("medialib://") and not metadata.is_empty():
 		requested_play = true
 		var start: int = int(metadata.get("start_ms", -1))
-		return open_local(uri, title, _resume(uri) if start < 0 else start, true, false, str(metadata.get("basename", "")))
-	if not recent_files.lookup(uri).is_empty():
-		return open_recent(uri)
-	requested_play = true
-	return open_local(uri, title, 0)
+		opened = open_local(uri, title, _resume(uri) if start < 0 else start, true, false, str(metadata.get("basename", "")), metadata)
+	elif not recent_files.lookup(uri).is_empty():
+		opened = open_recent(uri, false, metadata)
+	else:
+		requested_play = true
+		opened = open_local(uri, title, 0, true, false, "", metadata)
+	if opened and RecentFiles.valid_cover(cover): _library_cover = cover
+	return opened
 
-func open_recent(uri: String, from_start: bool = false) -> bool:
+func open_recent(uri: String, from_start: bool = false, metadata: Dictionary = {}) -> bool:
 	var entry := recent_files.lookup(uri)
 	if entry.is_empty() or not platform:
 		return false
 	if not uri.begins_with("content://"):
 		requested_play = true
-		return open_local(uri, str(entry.title), 0 if from_start else _resume(uri))
+		return open_local(uri, str(entry.title), 0 if from_start else _resume(uri), true, false, "", metadata)
 	cancel_pending_open()
-	_access_pending = {"uri": uri, "title": str(entry.title), "start_ms": 0 if from_start else _resume(uri)}
+	_access_pending = {"uri": uri, "title": str(entry.title), "start_ms": 0 if from_start else _resume(uri), "metadata": metadata.duplicate(true)}
 	_access_request = platform.request_local_video_access(uri)
 	if _access_request <= 0:
 		_access_pending = {}
@@ -298,7 +338,9 @@ func _on_local_access(id: int, payload: String) -> void:
 		changed.emit()
 		return
 	requested_play = true
-	if open_local(str(pending.uri), str(pending.title), int(pending.start_ms)):
+	var metadata: Dictionary = pending.get("metadata", {}).duplicate(true)
+	if not str(result.get("display_name", "")).is_empty(): metadata.basename = result.display_name
+	if open_local(str(pending.uri), str(pending.title), int(pending.start_ms), true, false, "", metadata):
 		_file_permission_persisted = result.persisted_permission
 
 func play_calibration_clip() -> void:
@@ -323,7 +365,7 @@ func play_calibration_clip() -> void:
 	requested_play = true
 	open_local("file://" + ProjectSettings.globalize_path(path), filename, 0, false)
 
-func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: bool = true, alpha: bool = false, basename: String = "") -> bool:
+func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: bool = true, alpha: bool = false, basename: String = "", metadata: Dictionary = {}) -> bool:
 	if not platform or not platform.mpv_supported():
 		picker_error = "MPV playback backend unavailable"
 		changed.emit()
@@ -367,11 +409,23 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 	# Videos start as normal playback unless the name asks for live Alpha.
 	alpha_requested = alpha or (restore_mode and bool(stated.get("alpha", false)) and not packed_file)
 	_thumb_tries = 0
+	_thumbnail_result = {}
 	_thumb_after_ms = -1
-	if _thumbnail_source(uri) and not Thumbnails.has(uri):
-		_thumb_after_ms = 0 # wanted; the position is chosen once the duration is known
+	if _thumbnail_source(uri) and Thumbnails.texture(uri) == null:
+		_thumb_after_ms = 0
 	local_uri = uri
 	display_name = title
+	_bookmark_metadata = metadata.duplicate(true)
+	if not basename.is_empty(): _bookmark_metadata.basename = basename
+	if str(_bookmark_metadata.get("basename", "")).is_empty():
+		if uri.begins_with("file://") or uri.begins_with("smb://") or uri.begins_with("cloud://"):
+			_bookmark_metadata.basename = uri.uri_decode().get_file()
+		elif uri.begins_with("content://"):
+			_bookmark_metadata.basename = title
+	if uri.begins_with("file://"):
+		var source := FileAccess.open(uri.trim_prefix("file://").uri_decode(), FileAccess.READ)
+		if source: _bookmark_metadata.size = source.get_length()
+	_bookmark_resolve()
 	depth_requested = auto_depth and geometry == Geometry.Geometry.FLAT and not stereo_sbs and not alpha_requested
 	var id: int = platform.open_mpv_video(uri, maxi(start_ms, 0), stereo_sbs, profile, alpha_requested, true, depth_requested,
 		stereo_sbs and top_bottom)
@@ -397,7 +451,10 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 func _unbind() -> void:
 	var previous: Dictionary = _binding.unbind()
 	if platform and not previous.is_empty():
-		platform.detach_mpv_pair(int(previous.session_id), int(previous.slot_token))
+		if int(previous.get("frozen_frame_id", 0)) > 0:
+			platform.release_mpv_frozen_frame(int(previous.frozen_frame_id))
+		else:
+			platform.detach_mpv_pair(int(previous.session_id), int(previous.slot_token))
 	alpha_enabled = false
 	_rvm_alpha = false
 	depth_enabled = false
@@ -406,6 +463,13 @@ func _unbind() -> void:
 		caption.visible = false
 
 func close_video() -> void:
+	_bookmark_scope_sequence += 1
+	_bookmark_media_id = ""
+	_bookmark_metadata.clear()
+	_bookmark_rows.clear()
+	_bookmark_cache_revision = -1
+	_thumbnail_sequence += 1
+	_library_cover = ""
 	_record_history(true)
 	cancel_pending_open()
 	if mode_memory.dirty:
@@ -418,6 +482,8 @@ func close_video() -> void:
 	media.close()
 	_pending_pair = {}
 	_pending_revision = {}
+	_freeze_request = 0
+	_debug_seek_delay_until_ms = 0
 	_waiting_first = false
 	_audio_pending = false
 	control.close()
@@ -447,6 +513,7 @@ func _record_history(force: bool = false) -> void:
 		if not recent_files.opened(local_uri, display_name, _file_permission_persisted):
 			return
 		_history_started = true
+		recent_files.set_cover(local_uri, _library_cover)
 		force = true
 	var now := Time.get_ticks_msec()
 	if not force and now < _history_save_ms:
@@ -467,23 +534,90 @@ func _request_revision(position_ms: int = -1) -> void:
 	subtitles.clear()
 	if caption:
 		caption.visible = false
+	if position_ms >= 0: _seek_event("requested")
+	_try_revision()
+
+func _start_seek_freeze() -> bool:
+	# Capture exactly once before seek/flush; rapid requests share this frame.
+	if _freeze_request == 0 and not _binding.ticket.is_empty() and not _is_frozen():
+		var capable := Engine.has_singleton("QuestPlayer") or platform.has_method("freeze_mpv_pair")
+		if capable:
+			_freeze_sequence += 1
+			_freeze_request = _freeze_sequence
+			if not platform.freeze_mpv_pair(media.session_id, int(_binding.ticket.slot_token), _freeze_request):
+				_abort_frozen_seek("Frame capture request rejected")
+			return true
+	return false
+
+func _is_frozen() -> bool:
+	return int(_binding.ticket.get("frozen_frame_id", 0)) > 0
+
+func _seek_event(stage: String) -> void:
+	_seek_trace.append({"stage": stage, "time_ms": Time.get_ticks_msec(), "visible": panel != null and panel.visible,
+		"frozen": _is_frozen(), "capture_pending": _freeze_request > 0,
+		"session_id": media.session_id, "target_ms": control.target_ms,
+		"displayed_pts_us": int(_binding.ticket.get("pts_us", -1)),
+		"freeze_copy_us": int(_binding.ticket.get("freeze_copy_us", 0))})
+	if _seek_trace.size() > 64: _seek_trace.pop_front()
+	_write_debug_report()
+
+func _abort_frozen_seek(reason: String) -> void:
+	_freeze_request = 0
+	_pending_revision = {}
+	_waiting_first = false
+	control.reject()
+	picker_error = reason
+	platform.set_mpv_playing(media.session_id, requested_play)
+	_seek_event("capture_failed")
+	changed.emit()
+
+func _on_frozen_pair(id: int, payload: String) -> void:
+	var report: Variant = JSON.parse_string(payload)
+	if not report is Dictionary: return
+	var pair: Dictionary = report.get("pair", {})
+	if id != media.session_id or int(report.get("request_id", 0)) != _freeze_request \
+			or _pending_revision.is_empty() or int(_pending_revision.position_ms) < 0:
+		if int(pair.get("frozen_frame_id", 0)) > 0:
+			platform.release_mpv_frozen_frame(int(pair.frozen_frame_id))
+		if int(report.get("request_id", 0)) == _freeze_request: _freeze_request = 0
+		return
+	if report.get("state") != "ready":
+		_abort_frozen_seek(str(report.get("error", "Frame capture failed")))
+		return
+	# Preserve visibility, shader parameters and effect state during replacement.
+	var previous := _binding.unbind()
+	if not _binding.bind(material, pair):
+		_binding.bind(material, previous)
+		platform.release_mpv_frozen_frame(int(pair.frozen_frame_id))
+		_abort_frozen_seek("Frozen video frame could not be bound")
+		return
+	platform.detach_mpv_pair(int(previous.session_id), int(previous.slot_token))
+	_freeze_request = 0
+	_seek_event("frozen")
 	_try_revision()
 
 func _try_revision() -> void:
-	if _pending_revision.is_empty():
+	if _pending_revision.is_empty() or _freeze_request > 0 or _pixel_busy or _thumbnail_busy:
+		return
+	if int(_pending_revision.position_ms) >= 0 and _start_seek_freeze(): return
+	if int(_pending_revision.position_ms) >= 0 and Time.get_ticks_msec() < _debug_seek_delay_until_ms:
 		return
 	var request := _pending_revision
 	var id: int = platform.revise_mpv_video(media.session_id, request.stereo, request.alpha, request.profile, request.position_ms,
 		request.depth, request.top_bottom)
 	if id <= 0:
 		return
-	_unbind()
+	if int(request.position_ms) < 0 or not _is_frozen(): _unbind()
 	_pending_pair = {}
 	_pending_revision = {}
+	var held_format := media.format.duplicate()
 	media.begin(id)
+	if _is_frozen(): media.format = held_format
 	platform.set_mpv_playing(id, false)
 	if int(request.position_ms) >= 0:
 		control.take_pending()
+		_debug_seek_delay_until_ms = 0
+		_seek_event("seek_started")
 	changed.emit()
 
 ## Alpha as the user sees it: live RVM, or the mask packed in this file.
@@ -635,6 +769,56 @@ func seek_absolute(position_ms: int) -> bool:
 	control.seek_absolute(position_ms)
 	_request_revision(control.target_ms)
 	return true
+
+func _bookmark_resolve() -> void:
+	_bookmark_media_id = bookmark_store.resolve(local_uri, str(_bookmark_metadata.get("basename", "")), _bookmark_metadata.get("size", -1))
+	_bookmark_cache_revision = -1
+
+func bookmark_seekable() -> bool:
+	var details: Dictionary = media.playback.get("details", {})
+	return media.accepts(media.session_id) and control.duration_ms > 0 and details.get("seekable", "") == "yes" \
+		and details.get("partially_seekable", "no") != "yes" and media.state not in ["failed", "closed"]
+
+func bookmark_scope() -> String:
+	return str(_bookmark_scope_sequence) + "|" + _bookmark_media_id
+
+func bookmark_snapshot() -> Dictionary:
+	if not bookmark_seekable() or _waiting_first or control.pending or control.in_flight > 0 \
+		or not _pending_revision.is_empty() or _is_frozen() or not panel or not panel.visible: return {}
+	var pair: Dictionary = _binding.ticket
+	if not pair.get("source_pts_verified", false) or int(pair.get("session_id", -1)) != media.session_id \
+		or int(pair.get("generation", -1)) != media.generation or int(pair.get("pts_us", -1)) < 0: return {}
+	var time := int(pair.pts_us) / 1000
+	if time >= control.duration_ms: return {}
+	return {"scope": bookmark_scope(), "position_ms": time}
+
+func bookmarks_snapshot() -> Dictionary:
+	if _bookmark_cache_revision != bookmark_store.revision:
+		_bookmark_rows = bookmark_store.list_markers(_bookmark_media_id)
+		_bookmark_cache_revision = bookmark_store.revision
+	return {"bookmark_scope": bookmark_scope(), "bookmarks": _bookmark_rows,
+		"bookmark_revision": bookmark_store.revision, "bookmark_undo": bookmark_store.can_undo(),
+		"bookmark_ready": not bookmark_snapshot().is_empty(), "bookmark_seekable": bookmark_seekable()}
+
+func bookmark_action(operation: String, marker_id: String, scope: String) -> String:
+	if scope != bookmark_scope(): return ""
+	match operation:
+		"add":
+			var snapshot := bookmark_snapshot()
+			if snapshot.is_empty(): return ""
+			var item := bookmark_store.add(local_uri, str(_bookmark_metadata.get("basename", "")), _bookmark_metadata.get("size", -1), int(snapshot.position_ms))
+			bookmark_last_added = item
+			return "Bookmark added" if not item.is_empty() else bookmark_store.last_error
+		"delete":
+			return "Bookmark deleted" if bookmark_store.remove(_bookmark_media_id, marker_id) else "Bookmark save failed"
+		"undo":
+			return "Bookmark restored" if bookmark_store.restore() else "Bookmark save failed"
+		"seek":
+			if not bookmark_seekable(): return ""
+			for marker in bookmark_store.list_markers(_bookmark_media_id):
+				if marker.id == marker_id and int(marker.position_ms) < control.duration_ms:
+					return "" if seek_absolute(int(marker.position_ms)) else "Bookmark jump failed"
+	return ""
 
 func set_subtitle_track(track_id: int) -> bool:
 	if track_id < -1 or not platform or not media.accepts(media.session_id):
@@ -889,7 +1073,7 @@ func _on_pair(id: int, payload: String) -> void:
 		_pending_pair = pair
 
 func _present_pending() -> void:
-	if _pixel_busy or _pending_pair.is_empty() or not _pending_revision.is_empty():
+	if _pixel_busy or _thumbnail_busy or _pending_pair.is_empty() or not _pending_revision.is_empty():
 		return
 	var offered := _pending_pair
 	_pending_pair = {}
@@ -920,6 +1104,7 @@ func _present_pending() -> void:
 		_unbind()
 		return
 	if _waiting_first:
+		if control.in_flight > 0: _seek_event("target_presented")
 		_waiting_first = false
 		control.first_frame()
 		platform.set_mpv_playing(media.session_id, requested_play)
@@ -943,6 +1128,11 @@ func _on_state(id: int, payload: String) -> void:
 		requested_play = false
 	media.playback = report
 	var details: Dictionary = report.get("details", {})
+	var size := str(details.get("file_size", ""))
+	if not BookmarkStore.integer(_bookmark_metadata.get("size", -1), 1, 9007199254740991) and size.is_valid_int() and BookmarkStore.integer(int(size), 1, 9007199254740991):
+		# Native metadata fills gaps for recent/SAF opens, without hashing or reading the video.
+		_bookmark_metadata.size = int(size)
+		_bookmark_resolve()
 	if details.has("position_seconds"):
 		control.observe(int(float(details.position_seconds) * 1000), int(float(details.get("duration_seconds", "-1")) * 1000))
 		media.decoder = str(details.get("codec", "")) + " / " + str(details.get("hwdec_current", ""))
@@ -957,9 +1147,14 @@ func _on_state(id: int, payload: String) -> void:
 func _on_error(id: int, payload: String) -> void:
 	if id != media.session_id:
 		return
+	_thumbnail_sequence += 1
 	var report: Variant = JSON.parse_string(payload)
 	media.error = str(report.get("code", "MPV playback failed")) if report is Dictionary else "MPV playback failed"
 	media.state = "failed"
+	_freeze_request = 0
+	_pending_revision = {}
+	_waiting_first = false
+	control.reject()
 	subtitles.clear()
 	_recover = media.error == "MPV_GL_CONTEXT_RECREATED"
 	_recover_ms = control.observed_position_ms
@@ -969,7 +1164,7 @@ func _on_error(id: int, payload: String) -> void:
 	changed.emit()
 
 func _on_detach(id: int, _payload: String) -> void:
-	if int(_binding.ticket.get("session_id", 0)) == id:
+	if int(_binding.ticket.get("session_id", 0)) == id and not _is_frozen():
 		_unbind()
 
 func _on_released(id: int, _payload: String) -> void:
@@ -1017,7 +1212,21 @@ func _on_debug_command(id: int, payload: String) -> void:
 		if requested_play != bool(command.enabled) or (bool(command.enabled) and media.state == "ended"):
 			toggle_play()
 	elif command.operation == "seek":
+		_debug_seek_delay_until_ms = Time.get_ticks_msec() + clampi(int(command.get("hold_seek_ms", 0)), 0, 30000)
 		seek_absolute(int(command.position_ms))
+	elif command.operation == "hold_pixels":
+		if _is_frozen() and not _pixel_busy:
+			var held: Dictionary = _binding.ticket.duplicate(true)
+			if _binding.warped: held.stereo_sbs = false
+			var pinned: bool = platform.retain_mpv_frozen_frame(int(held.frozen_frame_id))
+			if not pinned: return
+			_pixel_busy = true
+			_debug_pixels = await PixelProbe.capture(self, held, id)
+			_debug_pixels["request_key"] = str(command.request_key)
+			platform.release_mpv_frozen_frame(int(held.frozen_frame_id))
+			_pixel_busy = false
+	elif command.operation == "observe":
+		pass
 	elif command.operation == "stereo":
 		if stereo_sbs != bool(command.enabled):
 			toggle_stereo()
@@ -1070,12 +1279,24 @@ func _write_debug_report() -> void:
 	if _debug_benchmark and now < _debug_next_report_us:
 		return
 	_debug_next_report_us = now + 250000
+	var progress: Dictionary = {}
+	var host := get_parent()
+	if host and host.has_method("_menu_state"):
+		var menu: Node3D = host.player_menu
+		if menu and menu.visible and is_instance_valid(menu._thumb):
+			progress = {"visible": true, "position_ms": int(menu._state.get("position_ms", -1)),
+				"preview_ms": menu._seek_preview, "elapsed": menu._elapsed.text,
+				"thumb_x": menu._thumb.position.x, "bar_width": menu.BAR_SEEK,
+				"duration_ms": int(menu._state.get("duration_ms", -1))}
 	var report := {"schema_version": 1, "request_id": _debug_request, "commands": _debug_commands,
 		"media": media.snapshot(), "layout": layout_snapshot(), "pairs": _debug_pairs,
 		"native_status": _debug_status, "engine_fps": Engine.get_frames_per_second(),
 		"sample_monotonic_us": now, "engine_drawn_frames": Engine.get_frames_drawn(),
 		"benchmark": _debug_benchmark,
 		"pixel_probe": _debug_pixels,
+		"seek_trace": _seek_trace,
+		"player_menu_progress": progress,
+		"thumbnail": {"available": Thumbnails.has(local_uri), "capture": _thumbnail_result, "busy": _thumbnail_busy},
 		"diagnostic_2d": OS.get_cmdline_user_args().has("--mpv-diagnostic-2d"),
 		"scope": "Production MPV/RVM/Godot ownership trace; independent pixel, audio and performance validation pending"}
 	platform.save_mpv_player_report(_debug_request, JSON.stringify(report))
@@ -1104,7 +1325,11 @@ func layout_snapshot() -> Dictionary:
 		"alpha_ready": alpha_ready(), "backend": "Android_libmpv", "loop_enabled": loop_enabled,
 		"playback_control": playback, "subtitles": {"requested_track": subtitles.requested_track,
 			"cue": subtitles.cue, "text": subtitles.text, "render_layer": "independent_Label3D",
-			"source_frame_sync_verified": false, "device_validation": "pending"}, "device_validation": "pending"}
+			"source_frame_sync_verified": false, "device_validation": "pending"},
+		"frame_hold": {"visible": panel.visible, "frozen": _is_frozen(), "capture_pending": _freeze_request > 0,
+			"frame_id": int(_binding.ticket.get("frame_id", -1)), "pts_us": int(_binding.ticket.get("pts_us", -1)),
+			"frozen_frame_id": int(_binding.ticket.get("frozen_frame_id", 0)),
+			"freeze_copy_us": int(_binding.ticket.get("freeze_copy_us", 0))}, "device_validation": "pending"}
 
 func _can_loop() -> bool:
 	if not loop_enabled or not requested_play or media.state != "ended" or _waiting_first or not _pending_revision.is_empty():

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -147,6 +148,15 @@ uniform sampler2D source;
 in highp vec2 uv; out vec4 result;
 void main() { result = vec4(texture(source, uv).rgb, 1.0); }
 )";
+// Canonical decoder rows, unlike the Android SurfaceTexture transform above.
+constexpr const char* freeze_oes_fragment = R"(#version 300 es
+#extension GL_OES_EGL_image_external_essl3 : require
+precision highp float;
+uniform samplerExternalOES source;
+uniform vec2 uv_scale;
+in highp vec2 uv; out vec4 result;
+void main() { result = vec4(texture(source, uv * uv_scale).rgb, 1.0); }
+)";
 // Realtime 2D->3D stereo, ported from PTMediaServer's soft_shift (offline/two_dvr_gpu.py): forward
 // warp with a z-buffer, disocclusion holes filled from the inverse warp, a background-side rim
 // cleanup, a seam blend that never smears the occluder, and the in-body sliver cleanup.
@@ -184,19 +194,6 @@ float near_at(int x, int y, bool snap) {
 uint key_at(int x, int y) { return keys[y * 2 * size.x + x]; }
 float near_of(uint k) { return k == 0u ? -1.0 : float((k >> 12) - 1u) / 524287.0; }
 )";
-// Local background near per model pixel: minimum over the columns the largest shift can reach.
-constexpr const char* warp_background = R"(
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(r32f, binding = 1) writeonly uniform highp image2D background;
-void main() {
-    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-    if (p.x >= model.x || p.y >= model.y) return;
-    int reach = int(ceil(shift.x * content.z * float(model.x) / float(size.x))) + 1;
-    float m = 1.0;
-    for (int c = p.x - reach; c <= p.x + reach; ++c) m = min(m, tap(clamp(c, 0, model.x - 1), p.y));
-    imageStore(background, p, vec4(m));
-}
-)";
 constexpr const char* warp_clear = R"(
 layout(local_size_x = 256) in;
 uniform int count;
@@ -223,8 +220,6 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(rgba16f, binding = 0) writeonly uniform highp image2D map;
 uniform int rim;     // background-side rim cleanup width (fw_hole_from_inv)
 uniform int fg_win;  // sliver window (fw_fg_bad_local)
-uniform vec2 fill;   // occluder guard: near tolerance over the local background (0 = off), extra px
-uniform highp sampler2D background; // warp_background
 void main() {
     ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     int W = size.x;
@@ -245,30 +240,8 @@ void main() {
     if (inv) {
         float n = near_at(ex, o.y, false);
         src = clamp(float(ex) + (eye == 0 ? -1.0 : 1.0) * (n - shift.y) * shift.x, 0.0, float(W - 1));
-        if (fill.x > 0.0) {
-            // What a disocclusion reveals was hidden in the source, so the inverse sample often lands
-            // on the occluder and copies it (a wavy ghost of the hair at high strength). Walk the
-            // sample toward the hole's background side until it is background (within fill.x of the
-            // local minimum near over the largest shift), then fill.y px further past the wisps.
-            vec2 lo = ceil(content.xy * vec2(model) - 0.5);
-            vec2 hi = max(lo, floor((content.xy + content.zw) * vec2(model) - 0.5));
-            vec2 p = clamp((content.xy + (vec2(ex, o.y) + 0.5) / vec2(size) * content.zw) * vec2(model) - 0.5, lo, hi);
-            int ay = int(floor(p.y)), by = min(ay + 1, int(hi.y)), ax = int(floor(p.x));
-            float fy = p.y - float(ay);
-            float ref = min(texelFetch(background, ivec2(ax, ay), 0).r, texelFetch(background, ivec2(ax, by), 0).r);
-            float dir = eye == 0 ? -1.0 : 1.0;
-            float step = float(W) / (content.z * float(model.x)); // one model column
-            bool moved = false;
-            for (int i = 0; i < 64; ++i) {
-                int mx = clamp(int(floor((content.x + (src + 0.5) / float(W) * content.z) * float(model.x))), int(lo.x), int(hi.x));
-                if (mix(tap(mx, ay), tap(mx, by), fy) <= ref + fill.x) break;
-                src = clamp(src + dir * step, 0.0, float(W - 1));
-                moved = true;
-            }
-            if (moved) src = clamp(src + dir * fill.y, 0.0, float(W - 1));
-        }
     }
-    float gate = k != 0u && inv ? 3.0 : 2.0; // 3 marks a rim pixel the frame pass smooths with the holes
+    float gate = 2.0;
     if (k == 0u) {
         float nmin = 2.0, nmax = -1.0;
         for (int dy = -2; dy <= 2; ++dy) {
@@ -300,58 +273,29 @@ void main() {
     imageStore(map, o, vec4(src - float(ex), z, gate, pick));
 }
 )";
-// Once per map: disocclusion offsets averaged over rows (holes and rim only), so a ragged silhouette
-// does not band the fill. Reads the classified map, writes the one the frame pass samples.
-constexpr const char* warp_smooth = R"(
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(rgba16f, binding = 0) writeonly uniform highp image2D map;
-uniform highp sampler2D raw;
-uniform int rows;
-void main() {
-    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
-    if (o.x >= 2 * size.x || o.y >= size.y) return;
-    vec4 m = texelFetch(raw, o, 0);
-    if ((m.y < 0.0 || m.z > 2.5) && rows > 0) {
-        float acc = 0.0, cnt = 0.0;
-        for (int dy = -rows; dy <= rows; ++dy) {
-            vec4 nm = texelFetch(raw, ivec2(o.x, clamp(o.y + dy, 0, size.y - 1)), 0);
-            if (nm.y < 0.0 || nm.z > 2.5) { acc += nm.x; cnt += 1.0; }
-        }
-        m.x = acc / cnt;
-    }
-    imageStore(map, o, m);
-}
-)";
 // Per frame, one pass: every output texel takes its source colour (winner column, or the inverse
 // warp); holes get fw_blend (7x5, the occluder excluded across a depth step) and fw_fg_bad_local
 // slivers the colour of their nearest enclosing foreground. Neighbours are resolved through the
 // map too, so no intermediate image is written.
 constexpr const char* warp_frame_body = R"(
 uniform highp sampler2D map;
-uniform sampler2D motion;   // model grid: share of the parallax removed (stale depth at a moving edge)
-uniform vec4 content;       // model = content.xy + eye_uv * content.zw
 uniform vec2 uv_scale;
 uniform ivec2 size;
 out vec4 result;
-float keep = 1.0;
 vec3 colour(ivec2 o, vec4 m) {
     int ex = o.x >= size.x ? o.x - size.x : o.x;
-    return texture(source, vec2((float(ex) + m.x * keep + 0.5) / float(size.x), (float(o.y) + 0.5) / float(size.y)) * uv_scale).rgb;
+    return texture(source, vec2((float(ex) + m.x + 0.5) / float(size.x), (float(o.y) + 0.5) / float(size.y)) * uv_scale).rgb;
 }
 void main() {
     ivec2 o = ivec2(gl_FragCoord.xy);
-    int ex = o.x >= size.x ? o.x - size.x : o.x;
-    vec2 uv = vec2((float(ex) + 0.5) / float(size.x), (float(o.y) + 0.5) / float(size.y));
-    keep = 1.0 - texture(motion, content.xy + uv * content.zw).r;
     vec4 m = texelFetch(map, o, 0);
-    bool flattened = keep < 0.5; // no occlusion repair where the stale map is mostly ignored
-    if (m.w != 0.0 && !flattened) {
+    if (m.w != 0.0) {
         ivec2 q = o + ivec2(int(m.w), 0);
         result = vec4(colour(q, texelFetch(map, q, 0)), 1.0);
         return;
     }
     vec3 c = colour(o, m);
-    if (m.y >= 0.0 || flattened) { result = vec4(c, 1.0); return; }
+    if (m.y >= 0.0) { result = vec4(c, 1.0); return; }
     int lo = o.x >= size.x ? size.x : 0, hi = lo + size.x;
     vec3 sum = vec3(0.0); float n = 0.0;
     for (int dy = -2; dy <= 2; ++dy) {
@@ -376,46 +320,6 @@ constexpr const char* warp_frame_oes = R"(#version 300 es
 precision highp float; precision highp int;
 uniform samplerExternalOES source;
 )";
-// Per frame, at the model grid: how much parallax to remove where the depth is stale. The pair mask
-// carries the near map (left) and its source frame's luminance (right). Where the shown frame has
-// changed since (5x5 max of the luma difference) AND the near map has an edge nearby (9x9 range), a
-// moving silhouette meets a map from 5-10 frames ago: there the old map drags background with the
-// subject (the outline "overflow"), so its parallax is reduced. Flat-depth interiors keep theirs.
-constexpr const char* warp_motion_body = R"(
-uniform highp sampler2D pair_mask;
-uniform vec2 uv_scale;
-uniform ivec2 model;
-uniform vec4 content;
-uniform vec2 footprint;   // one model pixel in eye uv
-uniform vec3 params;      // luma difference band (lo, hi), largest share removed
-out vec4 result;
-ivec2 lo_px, hi_px;
-float current_luma(ivec2 q) {
-    vec2 uv = ((vec2(q) + 0.5) / vec2(model) - content.xy) / content.zw;
-    vec2 f = footprint * 0.25;
-    vec3 s = texture(source, clamp(uv + vec2(-f.x, -f.y), 0.0, 1.0) * uv_scale).rgb
-           + texture(source, clamp(uv + vec2( f.x, -f.y), 0.0, 1.0) * uv_scale).rgb
-           + texture(source, clamp(uv + vec2(-f.x,  f.y), 0.0, 1.0) * uv_scale).rgb
-           + texture(source, clamp(uv + vec2( f.x,  f.y), 0.0, 1.0) * uv_scale).rgb;
-    return dot(s, vec3(1.0 / 12.0));
-}
-void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
-    lo_px = ivec2(ceil(content.xy * vec2(model) - 0.5));
-    hi_px = max(lo_px, ivec2(floor((content.xy + content.zw) * vec2(model) - 0.5)));
-    if (any(lessThan(p, lo_px)) || any(greaterThan(p, hi_px)) || params.z <= 0.0) { result = vec4(0.0); return; }
-    float d = 0.0;
-    for (int dy = -2; dy <= 2; ++dy) for (int dx = -2; dx <= 2; ++dx) {
-        ivec2 q = clamp(p + ivec2(dx, dy), lo_px, hi_px);
-        d = max(d, abs(current_luma(q) - texelFetch(pair_mask, ivec2(q.x + model.x, q.y), 0).r));
-    }
-    float nlo = 1.0, nhi = 0.0;
-    for (int dy = -4; dy <= 4; ++dy) for (int dx = -4; dx <= 4; ++dx) {
-        float n = texelFetch(pair_mask, clamp(p + ivec2(dx, dy), lo_px, hi_px), 0).r;
-        nlo = min(nlo, n); nhi = max(nhi, n);
-    }
-    result = vec4(smoothstep(params.x, params.y, d) * smoothstep(0.1, 0.3, nhi - nlo) * params.z, 0.0, 0.0, 1.0);
-})";
 GLuint shader(GLenum kind, const char* source) {
     const GLuint id = glCreateShader(kind);
     glShaderSource(id, 1, &source, nullptr); glCompileShader(id);
@@ -446,32 +350,6 @@ GLuint compute_program(const char* body) {
     return id;
 }
 GLuint warp_frame_program(const char* header) { return program((std::string(header) + warp_frame_body).c_str()); }
-GLuint warp_motion_program(const char* header) { return program((std::string(header) + warp_motion_body).c_str()); }
-// Debug tuning: setprop debug.vrpp.depth.motion "lo,hi,share" (luma band and largest share of the
-// parallax removed); "0" turns the attenuation off.
-// Debug tuning: setprop debug.vrpp.depth.fill "tol,px,rows" (occluder guard of disocclusion fills);
-// "0" restores the plain inverse fill.
-std::array<float, 3> fill_params() {
-    std::array<float, 3> params{{0.06f, 10.f, 10.f}};
-    char value[PROP_VALUE_MAX] = {};
-    if (__system_property_get("debug.vrpp.depth.fill", value) > 0) {
-        float tol = 0, px = 0, rows = 0;
-        if (std::sscanf(value, "%f,%f,%f", &tol, &px, &rows) == 3 && tol >= 0.f && px >= 0.f && rows >= 0.f && rows <= 32.f)
-            params = {{tol, px, rows}};
-        else if (std::strcmp(value, "0") == 0) params = {{0.f, 0.f, 0.f}};
-    }
-    return params;
-}
-std::array<float, 3> motion_params() {
-    std::array<float, 3> params{{0.04f, 0.12f, 0.7f}};
-    char value[PROP_VALUE_MAX] = {};
-    if (__system_property_get("debug.vrpp.depth.motion", value) > 0) {
-        float lo = 0, hi = 0, share = 0;
-        if (std::sscanf(value, "%f,%f,%f", &lo, &hi, &share) == 3 && hi > lo && share >= 0.f && share <= 1.f) params = {{lo, hi, share}};
-        else if (std::strcmp(value, "0") == 0) params[2] = 0.f;
-    }
-    return params;
-}
 void image(GLuint& id, int width, int height, GLenum format = GL_RGBA8) {
     glGenTextures(1, &id); glBindTexture(GL_TEXTURE_2D, id);
     glTexStorage2D(GL_TEXTURE_2D, 1, format, width, height);
@@ -618,7 +496,7 @@ struct Bridge final {
     // 0 mono, 1 side by side (left half first), 2 top-bottom (top half first; canonical row 0 is top).
     const int layout;
     bool abandoned = false;
-    GLuint oes = 0, copy = 0, copy_2d = 0, scale = 0, scale_oes = 0, vao = 0, fbo = 0, small = 0;
+    GLuint oes = 0, copy = 0, copy_2d = 0, scale = 0, scale_oes = 0, freeze_oes = 0, vao = 0, fbo = 0, small = 0;
     // Display, retiring, inference, pending and staging can overlap; with borrowed colors a slot is
     // only the model inputs and the R8 mask, so five cost little. 2D->3D keeps each slot until its
     // stereo pair is rendered: two more slots keep 60 fps sources from running out.
@@ -632,14 +510,11 @@ struct Bridge final {
     std::array<SharedImage, 2> zc_scout_out; // one scout runs at a time; read on the CPU right after
     uint64_t zero_copy_commits = 0;
     // 2D->3D stereo (mono sources only): see warp_common.
-    GLuint warp_keys = 0, warp_map = 0, warp_motion = 0, warp_raw = 0, warp_bg = 0;
-    GLuint warp_background_prog = 0, warp_smooth_prog = 0;
-    GLuint warp_clear_prog = 0, warp_scatter_prog = 0, warp_classify_prog = 0, warp_frame_2d_prog = 0, warp_frame_oes_prog = 0,
-           warp_motion_2d_prog = 0, warp_motion_oes_prog = 0;
+    GLuint warp_keys = 0, warp_map = 0;
+    GLuint warp_clear_prog = 0, warp_scatter_prog = 0, warp_classify_prog = 0, warp_frame_2d_prog = 0, warp_frame_oes_prog = 0;
     bool warp_failed = false;
     std::vector<unsigned char> map_near; // near map the current `warp_map` was built from
     float map_half = -1.f, map_convergence = -1.f;
-    std::array<float, 3> map_fill{{-1.f, -1.f, -1.f}};
     uint64_t warp_frames = 0, warp_maps = 0;
     GpuTimer map_timer, frame_timer;
     Bridge(int w, int h, int iw, int ih, int l) : width(w), height(h), input_width(iw), input_height(ih), layout(l) {}
@@ -694,13 +569,10 @@ struct Bridge final {
         if (copy_2d) glDeleteProgram(copy_2d);
         if (scale) glDeleteProgram(scale);
         if (scale_oes) glDeleteProgram(scale_oes);
+        if (freeze_oes) glDeleteProgram(freeze_oes);
         if (warp_keys) glDeleteBuffers(1, &warp_keys);
         if (warp_map) glDeleteTextures(1, &warp_map);
-        if (warp_motion) glDeleteTextures(1, &warp_motion);
-        for (GLuint* texture : {&warp_raw, &warp_bg}) if (*texture) glDeleteTextures(1, texture);
-        for (GLuint prog : {warp_background_prog, warp_smooth_prog}) if (prog) glDeleteProgram(prog);
-        for (GLuint prog : {warp_clear_prog, warp_scatter_prog, warp_classify_prog, warp_frame_2d_prog, warp_frame_oes_prog,
-                            warp_motion_2d_prog, warp_motion_oes_prog})
+        for (GLuint prog : {warp_clear_prog, warp_scatter_prog, warp_classify_prog, warp_frame_2d_prog, warp_frame_oes_prog})
             if (prog) glDeleteProgram(prog);
     }
     static void release_decoder(Slot& slot) {
@@ -946,11 +818,9 @@ struct Bridge final {
             throw std::runtime_error("2D->3D warp requires a held color with a fresh near map");
         if (warp_failed || layout != 0 || width > 2560 || height > 2160) return 0;
         State state;
-        GLint unit1_2d = 0, unit1_sampler = 0, unit2_2d = 0, unit2_sampler = 0, ssbo = 0, ssbo0 = 0, image0 = 0;
+        GLint unit1_2d = 0, unit1_sampler = 0, ssbo = 0, ssbo0 = 0, image0 = 0;
         glActiveTexture(GL_TEXTURE1); glGetIntegerv(GL_TEXTURE_BINDING_2D, &unit1_2d); glGetIntegerv(GL_SAMPLER_BINDING, &unit1_sampler);
-        glBindSampler(1, 0);
-        glActiveTexture(GL_TEXTURE2); glGetIntegerv(GL_TEXTURE_BINDING_2D, &unit2_2d); glGetIntegerv(GL_SAMPLER_BINDING, &unit2_sampler);
-        glBindSampler(2, 0); glActiveTexture(GL_TEXTURE0);
+        glBindSampler(1, 0); glActiveTexture(GL_TEXTURE0);
         glGetIntegerv(GL_SHADER_STORAGE_BUFFER_BINDING, &ssbo); glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, 0, &ssbo0);
         glGetIntegeri_v(GL_IMAGE_BINDING_NAME, 0, &image0);
         GLuint result = 0;
@@ -962,9 +832,7 @@ struct Bridge final {
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLuint>(ssbo0)); glBindBuffer(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(ssbo));
         if (!image0) glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(unit1_2d));
-        glBindSampler(1, static_cast<GLuint>(unit1_sampler));
-        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(unit2_2d));
-        glBindSampler(2, static_cast<GLuint>(unit2_sampler)); glActiveTexture(GL_TEXTURE0);
+        glBindSampler(1, static_cast<GLuint>(unit1_sampler)); glActiveTexture(GL_TEXTURE0);
         while (glGetError() != GL_NO_ERROR) {}
         return result;
     }
@@ -993,24 +861,15 @@ struct Bridge final {
             warp_clear_prog = compute_program(warp_clear); warp_scatter_prog = compute_program(warp_scatter);
             warp_classify_prog = compute_program(warp_classify);
             warp_frame_2d_prog = warp_frame_program(warp_frame_2d); warp_frame_oes_prog = warp_frame_program(warp_frame_oes);
-            warp_motion_2d_prog = warp_motion_program(warp_frame_2d); warp_motion_oes_prog = warp_motion_program(warp_frame_oes);
-            image(warp_motion, input_width, input_height, GL_R8);
-            warp_background_prog = compute_program(warp_background); warp_smooth_prog = compute_program(warp_smooth);
-            image(warp_raw, W2, height, GL_RGBA16F);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            image(warp_bg, input_width, input_height, GL_R32F);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glGenBuffers(1, &warp_keys); glBindBuffer(GL_SHADER_STORAGE_BUFFER, warp_keys);
             glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(W2) * height * 4, nullptr, GL_DYNAMIC_COPY);
             image(warp_map, W2, height, GL_RGBA16F);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             if (glGetError() != GL_NO_ERROR) throw std::runtime_error("2D->3D warp allocation GL error");
         }
-        // Keep strength proportional at every resolution; shift is bounded to 0..0.2 at JNI.
-        // The former fixed 96 px cap made the upper strength range inert on HD sources.
-        const float half = width * shift * 0.5f;
-        const auto fill = fill_params();
-        if (slot.near != map_near || half != map_half || convergence != map_convergence || fill != map_fill) {
+        // PTMediaServer _max_disparity_pixels: max(2, min(96, W * 0.035 * strength)); each eye moves half.
+        const float half = shift > 0.f ? std::max(2.f, std::min(96.f, width * shift)) * 0.5f : 0.f;
+        if (slot.near != map_near || half != map_half || convergence != map_convergence) {
             map_timer.start();
             const auto uniforms = [&](GLuint prog) {
                 glUseProgram(prog);
@@ -1029,65 +888,33 @@ struct Bridge final {
             uniforms(warp_scatter_prog);
             glDispatchCompute(static_cast<GLuint>((width + 7) / 8), static_cast<GLuint>((height + 7) / 8), 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-            uniforms(warp_background_prog);
-            glBindImageTexture(1, warp_bg, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
-            glDispatchCompute(static_cast<GLuint>((input_width + 7) / 8), static_cast<GLuint>((input_height + 7) / 8), 1);
-            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
             uniforms(warp_classify_prog);
-            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, warp_bg); glActiveTexture(GL_TEXTURE0);
-            glUniform1i(glGetUniformLocation(warp_classify_prog, "background"), 1);
             glUniform1i(glGetUniformLocation(warp_classify_prog, "rim"), std::max(2, static_cast<int>(std::lround(width / 120.0))));
             glUniform1i(glGetUniformLocation(warp_classify_prog, "fg_win"), std::max(2, static_cast<int>(std::lround(width / 240.0))));
-            glUniform2f(glGetUniformLocation(warp_classify_prog, "fill"), fill[0], fill[1]);
-            glBindImageTexture(0, warp_raw, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-            glDispatchCompute(static_cast<GLuint>((W2 + 7) / 8), static_cast<GLuint>((height + 7) / 8), 1);
-            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
-            uniforms(warp_smooth_prog);
-            glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, warp_raw); glActiveTexture(GL_TEXTURE0);
-            glUniform1i(glGetUniformLocation(warp_smooth_prog, "raw"), 1);
-            glUniform1i(glGetUniformLocation(warp_smooth_prog, "rows"), static_cast<int>(fill[2]));
             glBindImageTexture(0, warp_map, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glDispatchCompute(static_cast<GLuint>((W2 + 7) / 8), static_cast<GLuint>((height + 7) / 8), 1);
             glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
-            glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
             map_timer.stop();
             if (glGetError() != GL_NO_ERROR) throw std::runtime_error("2D->3D warp map GL error");
-            map_near = slot.near; map_half = half; map_convergence = convergence; map_fill = fill; warp_maps++;
+            map_near = slot.near; map_half = half; map_convergence = convergence; warp_maps++;
         }
         if (!slot.warp) {
             image(slot.warp, W2, height);
             if (glGetError() != GL_NO_ERROR) throw std::runtime_error("2D->3D stereo allocation GL error");
         }
         frame_timer.start();
-        const auto bind_source = [&](GLuint prog) {
-            glUseProgram(prog);
-            if (slot.decoder_texture) {
-                glBindTexture(GL_TEXTURE_EXTERNAL_OES, slot.decoder_texture);
-                glUniform2f(glGetUniformLocation(prog, "uv_scale"), slot.uv_scale[0], slot.uv_scale[1]);
-            } else {
-                glBindTexture(GL_TEXTURE_2D, slot.source());
-                glUniform2f(glGetUniformLocation(prog, "uv_scale"), 1.f, 1.f);
-            }
-            glUniform1i(glGetUniformLocation(prog, "source"), 0);
-            glUniform4fv(glGetUniformLocation(prog, "content"), 1, content_rect.data());
-        };
-        // Stale-edge attenuation at the model grid (this frame against the depth's source frame).
-        target(warp_motion, input_width, input_height);
-        const GLuint motion_prog = slot.decoder_texture ? warp_motion_oes_prog : warp_motion_2d_prog;
-        bind_source(motion_prog);
-        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, slot.alpha); glActiveTexture(GL_TEXTURE0);
-        glUniform1i(glGetUniformLocation(motion_prog, "pair_mask"), 1);
-        glUniform2i(glGetUniformLocation(motion_prog, "model"), input_width, input_height);
-        glUniform2f(glGetUniformLocation(motion_prog, "footprint"), 1.f / input_width / content_rect[2], 1.f / input_height / content_rect[3]);
-        const auto params = motion_params();
-        glUniform3f(glGetUniformLocation(motion_prog, "params"), params[0], params[1], params[2]);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
         target(slot.warp, W2, height);
         const GLuint prog = slot.decoder_texture ? warp_frame_oes_prog : warp_frame_2d_prog;
-        bind_source(prog);
-        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, warp_map);
-        glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, warp_motion); glActiveTexture(GL_TEXTURE0);
-        glUniform1i(glGetUniformLocation(prog, "map"), 1); glUniform1i(glGetUniformLocation(prog, "motion"), 2);
+        glUseProgram(prog);
+        if (slot.decoder_texture) {
+            glBindTexture(GL_TEXTURE_EXTERNAL_OES, slot.decoder_texture);
+            glUniform2f(glGetUniformLocation(prog, "uv_scale"), slot.uv_scale[0], slot.uv_scale[1]);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, slot.source());
+            glUniform2f(glGetUniformLocation(prog, "uv_scale"), 1.f, 1.f);
+        }
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, warp_map); glActiveTexture(GL_TEXTURE0);
+        glUniform1i(glGetUniformLocation(prog, "source"), 0); glUniform1i(glGetUniformLocation(prog, "map"), 1);
         glUniform2i(glGetUniformLocation(prog, "size"), width, height);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         frame_timer.stop();
@@ -1114,6 +941,17 @@ struct Bridge final {
 };
 std::mutex registry_mutex;
 std::unordered_map<jlong, std::unique_ptr<Bridge>> registry;
+// Independent of processing sessions and decoder surfaces. Only one transition
+// can be displayed; no resource growth when many seek requests are coalesced.
+struct FrozenFrame final {
+    const EGLContext context = eglGetCurrentContext();
+    GLuint color = 0, alpha = 0;
+    ~FrozenFrame() {
+        if (context != eglGetCurrentContext()) return;
+        glDeleteTextures(1, &color); glDeleteTextures(1, &alpha);
+    }
+};
+std::unordered_map<jlong, std::unique_ptr<FrozenFrame>> frozen_frames;
 jlong sequence = 0, token_sequence = 0;
 Bridge& find(jlong handle) {
     const auto it = registry.find(handle);
@@ -1142,6 +980,61 @@ float* float_buffer(JNIEnv* env, jobject buffer, size_t bytes, bool writable = t
     return address;
 }
 } // namespace
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_org_vrpassthroughplayer_plugin_RenderBridgeNative_freezePair(JNIEnv* env, jclass, jlong id, jlong token, jboolean warped) {
+    try {
+        std::lock_guard<std::mutex> guard(registry_mutex);
+        auto& b = find(id); auto& slot = b.find(token);
+        if (slot.phase != Phase::held || !slot.alpha_valid || !frozen_frames.empty())
+            throw std::runtime_error("Freeze requires one complete held display pair and no previous snapshot");
+        const bool warp = warped == JNI_TRUE;
+        if (warp && !slot.warp) throw std::runtime_error("Frozen stereo warp unavailable");
+        const int width = b.width * (warp ? 2 : 1);
+        const auto started = std::chrono::steady_clock::now();
+        State state;
+        auto frozen = std::make_unique<FrozenFrame>();
+        image(frozen->color, width, b.height);
+        image(frozen->alpha, b.input_width * 2, b.input_height, GL_R8);
+        glBindFramebuffer(GL_FRAMEBUFFER, b.fbo); glBindVertexArray(b.vao); glActiveTexture(GL_TEXTURE0);
+        auto copy = [&](GLuint source, GLenum target, GLuint destination, int w, int h, GLuint prog) {
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, destination, 0);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                throw std::runtime_error("Freeze framebuffer incomplete");
+            glViewport(0, 0, w, h); glUseProgram(prog); glBindTexture(target, source);
+            glUniform1i(glGetUniformLocation(prog, "source"), 0);
+            if (target == GL_TEXTURE_EXTERNAL_OES)
+                glUniform2f(glGetUniformLocation(prog, "uv_scale"), slot.uv_scale[0], slot.uv_scale[1]);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            check_gl("Freeze frame GPU copy");
+        };
+        if (!warp && slot.decoder_texture) {
+            if (!b.freeze_oes) b.freeze_oes = program(freeze_oes_fragment);
+            copy(slot.decoder_texture, GL_TEXTURE_EXTERNAL_OES, frozen->color, width, b.height, b.freeze_oes);
+        } else copy(warp ? slot.warp : slot.source(), GL_TEXTURE_2D, frozen->color, width, b.height, b.copy_2d);
+        copy(slot.alpha, GL_TEXTURE_2D, frozen->alpha, b.input_width * 2, b.input_height, b.copy_2d);
+        // A seek may flush MediaCodec on a different context/thread as soon as
+        // this callback returns. Complete this one transition copy before it.
+        glFinish(); check_gl("Freeze frame GPU completion");
+        if (sequence == std::numeric_limits<jlong>::max()) throw std::runtime_error("Frozen handle space exhausted");
+        const jlong handle = ++sequence;
+        const jlong values[] = {handle, frozen->color, frozen->alpha, width, b.height,
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count()};
+        auto result = env->NewLongArray(6);
+        if (!result) return nullptr;
+        env->SetLongArrayRegion(result, 0, 6, values);
+        if (env->ExceptionCheck()) return nullptr;
+        frozen_frames.emplace(handle, std::move(frozen));
+        return result;
+    } catch (const std::exception& e) { error(env, e.what()); return nullptr; }
+}
+extern "C" JNIEXPORT void JNICALL
+Java_org_vrpassthroughplayer_plugin_RenderBridgeNative_releaseFrozen(JNIEnv*, jclass, jlong id) {
+    std::lock_guard<std::mutex> guard(registry_mutex);
+    // After the caller detached its wrappers/last draw, GL deletion preserves
+    // in-flight GPU uses. A lost context's names must never be deleted in a new one.
+    frozen_frames.erase(id);
+}
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_vrpassthroughplayer_plugin_RenderBridgeNative_createLayout(JNIEnv* env, jclass, jint w, jint h, jint iw, jint ih, jint layout) {

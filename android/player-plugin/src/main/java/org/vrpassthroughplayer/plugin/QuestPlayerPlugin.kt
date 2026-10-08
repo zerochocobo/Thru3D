@@ -8,6 +8,7 @@ import android.text.format.DateFormat
 import androidx.media3.common.util.UnstableApi
 import android.util.Log
 import org.godotengine.godot.Godot
+import org.godotengine.godot.GodotHost
 import org.godotengine.godot.plugin.GodotPlugin
 import org.godotengine.godot.plugin.SignalInfo
 import org.godotengine.godot.plugin.UsedByGodot
@@ -72,6 +73,14 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
 
     override fun getPluginName() = "QuestPlayer"
 
+    /** Use the engine host's process restart/termination path so XR is created afresh. */
+    @UsedByGodot fun finish_app(restart: Boolean) {
+        if (!closed.get()) runOnHostThread {
+            val host = activity as? GodotHost ?: return@runOnHostThread
+            if (restart) host.onGodotRestartRequested(godot) else host.onGodotForceQuit(godot)
+        }
+    }
+
     @UsedByGodot fun set_ui_language(choice: String) {
         activity?.applicationContext?.let { UiLanguage.setChoice(it, choice) }
     }
@@ -104,6 +113,7 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
         SignalInfo("mpv_released", Int::class.javaObjectType, String::class.java),
         SignalInfo("mpv_debug_command", Int::class.javaObjectType, String::class.java),
         SignalInfo("mpv_pixel_mask", Int::class.javaObjectType, String::class.java),
+        SignalInfo("mpv_frozen_pair", Int::class.javaObjectType, String::class.java),
     )
 
     @UsedByGodot fun pick_local_video(): Int {
@@ -162,7 +172,10 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     }
     @UsedByGodot fun media_list_local(): Int = media_local_browse("")
     @UsedByGodot fun media_cloud_browse(path: String, refresh: Boolean): Int = if (closed.get()) -1 else sources.cloudBrowse(path, refresh)
+    @UsedByGodot fun media_cloud_page(path: String, offset: Int, refresh: Boolean): Int = if (closed.get()) -1 else sources.cloudBrowse(path, refresh, offset)
+    @UsedByGodot fun media_cloud_cancel(id: Int) { if (!closed.get()) sources.cloudCancel(id) }
     @UsedByGodot fun media_cloud_accounts() { if (!closed.get()) runOnHostThread { sources.cloudAccounts() } }
+    @UsedByGodot fun media_cloud_remove(id: String): Int = if (closed.get()) -1 else sources.cloudRemove(id)
     @UsedByGodot fun media_server_request(json: String): Int = if (closed.get()) -1 else sources.serverRequest(json)
     @UsedByGodot fun media_server_cancel(id: Int) { sources.serverCancel(id) }
     @UsedByGodot fun media_server_accounts() { if (!closed.get()) runOnHostThread { sources.serverAccounts() } }
@@ -220,6 +233,11 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     @UsedByGodot fun claim_mpv_pair(id: Int, token: Long): String = if (closed.get()) "" else mpv.claim(id, token)
     @UsedByGodot fun acknowledge_mpv_pair(id: Int, token: Long): Boolean = !closed.get() && mpv.acknowledge(id, token)
     @UsedByGodot fun detach_mpv_pair(id: Int, token: Long): Boolean = mpv.detach(id, token)
+    @UsedByGodot fun freeze_mpv_pair(id: Int, token: Long, request: Int): Boolean = !closed.get() && mpv.freeze(id, token, request)
+    @UsedByGodot fun release_mpv_frozen_frame(id: Long) { mpv.releaseFrozen(id) }
+    @UsedByGodot fun retain_mpv_frozen_frame(id: Long): Boolean = !closed.get() && mpv.retainFrozen(id)
+    @UsedByGodot fun pin_mpv_pair(id: Int, token: Long): Boolean = !closed.get() && mpv.pinPair(id, token)
+    @UsedByGodot fun release_mpv_pair_pin(id: Int, token: Long): Boolean = mpv.unpinPair(id, token)
     @UsedByGodot fun close_mpv_video(id: Int) { mpv.close(id) }
     @UsedByGodot fun request_mpv_pixel_mask(request: Int, id: Int, token: Long): Boolean =
         !closed.get() && mpv.requestPixelMask(request, id, token)

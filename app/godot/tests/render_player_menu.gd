@@ -2,6 +2,7 @@ extends SceneTree
 
 const Menu := preload("res://scripts/player_menu.gd")
 var state := {"has_video": true, "geometry": 1, "playing": true, "playback_state": "playing", "alpha_requested": true,
+	"has_previous_video": true, "has_next_video": true,
 	"alpha_enabled": false, "stereo": true, "swap_eyes": false, "projection": "Fisheye", "profile": "512x512",
 	"volume": 90, "muted": false, "audio_available": true, "audio_tracks": 2, "audio_track": 2,
 	"text_subtitle_tracks": 2, "subtitle_track": 3, "capabilities_available": true,
@@ -70,7 +71,13 @@ func _run() -> void:
 			return
 		snapshots[str(section)] = menu.text_snapshot()
 	menu.section = 1
-	for detail in ["subtitle_distance", "color_grade"]:
+	state.geometry = 0
+	state.stereo = false
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("settings-flat.png"))
+	for detail in ["screen_distance", "subtitle_distance", "color_grade"]:
 		menu._adjustment = detail
 		for page in (3 if detail == "color_grade" else 1):
 			menu._grade_page = page
@@ -80,6 +87,8 @@ func _run() -> void:
 			await RenderingServer.frame_post_draw
 			viewport.get_texture().get_image().save_png(output.path_join("%s_%d.png" % [detail, page]))
 	menu._adjustment = ""
+	state.geometry = 1
+	state.stereo = true
 	state.error = ""
 	state.title = "Travel journal · VR180"
 	state.alpha_enabled = true
@@ -121,7 +130,7 @@ func _run() -> void:
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("playback_modes.png"))
-	if not menu._tooltip or not menu._tooltip.visible or menu._tooltip.get_child(0).text != "Alpha":
+	if not menu._tooltip or not menu._tooltip.visible or menu._tooltip.get_child(0).text != preload("res://scripts/i18n.gd").t("Passthrough"):
 		failures.append("Hovered bar icon shows its name")
 	# Fisheye: lens angles under the layouts; a top-bottom source lit.
 	state["geometry"] = 2

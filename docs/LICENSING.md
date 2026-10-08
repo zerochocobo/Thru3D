@@ -23,9 +23,10 @@ The project license does not replace third-party notices or claim ownership of u
 | Depth Anything V2 Small | Upstream Small weights are Apache-2.0. The ONNX export and graph/MNN modifications are recorded separately. Other Depth Anything model sizes can have different licenses. |
 | MNN / ncnn | Upstream Apache-2.0 / BSD-3-Clause respectively; preserve exact-version notices and the MNN modification record. |
 | Godot | MIT engine and corresponding template notices. |
+| Hand fallback meshes and texture | Unmodified MIT Godot OpenXR hand demo assets; full license and pinned upstream provenance in `app/godot/models/hands`. These glTF buffers are runtime visuals, not AI weights. |
 | Godot OpenXR Vendors | External addon; preserve the addon and each vendor component's actual license. No vendor SDK binaries are vendored here. |
 | AndroidX Media3 | Apache-2.0; retain applicable dependency/transitive notices when distributing an APK. |
-| jcifs-ng | LGPL-2.1; keep its source/license obligations and those of transitive dependencies. |
+| CodeLibs JCIFS | LGPL-2.1; keep its source/license obligations and those of transitive dependencies. |
 | p115rsacipher adaptation | MIT; source and attribution in `third_party/p115rsacipher`. |
 | Gradle wrapper | Apache-2.0; license and notice in `third_party/gradle`. |
 | Belfast Sunset (Pure Sky) | Unmodified Poly Haven background, CC0-1.0; source and attribution are kept with the image. |

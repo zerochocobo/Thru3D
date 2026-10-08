@@ -37,6 +37,9 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_RVM_STANDALONE") {
                         RvmStandaloneProbe.request(context.applicationContext, intent.getStringExtra("mode") ?: "resident",
                             intent.getStringExtra("profile") ?: "256x144")
+                    } else if (intent.action == "com.wapok.thru3d.DEBUG_SMB_CRYPTO") {
+                        report.put("smb", SmbCryptoProbe.run())
+                        1
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_CLOUD") {
                         CloudPlaybackProbe.request(context.applicationContext, request, intent.getBooleanExtra("play", false))
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_DLNA") {
@@ -79,8 +82,9 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                         when (intent.action) {
                         "com.wapok.thru3d.DEBUG_PLAYER_MPV" -> {
                             val operation = intent.getStringExtra("operation") ?: "open"
-                            require(operation in setOf("open", "alpha", "depth", "playing", "seek", "stereo", "profile", "close", "pixels", "subtitle"))
+                            require(operation in setOf("open", "alpha", "depth", "playing", "seek", "hold_pixels", "observe", "stereo", "profile", "close", "pixels", "subtitle", "display_quality", "sharpness", "cloud_accounts", "cloud_page_probe", "display_menu", "player_menu", "restart_app", "quit_app"))
                             val command = JSONObject().put("operation", operation).put("request_key", request)
+                                .put("value", intent.getFloatExtra("value", 0f).toDouble())
                                 .put("benchmark", intent.getBooleanExtra("benchmark", false))
                                 .put("normal_fast", intent.getBooleanExtra("normal_fast", true))
                                 .put("frame_cap", intent.getIntExtra("frame_cap", -1))
@@ -90,6 +94,7 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                                 .put("direct_yuv", intent.getBooleanExtra("direct_yuv", true))
                                 .put("enabled", intent.getBooleanExtra("enabled", false))
                                 .put("position_ms", intent.getIntExtra("position_ms", 0))
+                                .put("hold_seek_ms", intent.getIntExtra("hold_seek_ms", 0).coerceIn(0, 30000))
                                 .put("profile", intent.getStringExtra("profile") ?: "384x216")
                                 .put("loop", intent.getBooleanExtra("loop", false))
                                 // 2D->3D: a mono open with depth (stereo=false) or the "depth" operation.

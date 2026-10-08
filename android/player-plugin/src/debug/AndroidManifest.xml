@@ -20,6 +20,7 @@
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_GPU" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_SOURCE" />
                 <action android:name="com.wapok.thru3d.DEBUG_PLAYER_MPV" />
+                <action android:name="com.wapok.thru3d.DEBUG_SMB_CRYPTO" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_SHARED" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_AUDIO" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_MOTION" />

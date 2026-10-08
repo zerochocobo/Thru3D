@@ -1,4 +1,4 @@
-param([string]$Serial = '2G0YC5ZF7V0664', [ValidateRange(2,100)][int]$Switches = 100, [switch]$KeepAwake, [switch]$Xr)
+param([Parameter(Mandatory=$true)][string]$Serial, [ValidateRange(2,100)][int]$Switches = 100, [switch]$KeepAwake, [switch]$Xr)
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
 . "$PSScriptRoot/environment/Activate-QuestEnvironment.ps1"

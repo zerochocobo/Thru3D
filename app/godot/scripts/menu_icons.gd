@@ -2,6 +2,9 @@ extends RefCounted
 
 # Original vector glyphs, generated once and shared by both ray menus.
 const PATHS := {
+	"bookmark": '<path d="M6 3H18V21L12 17 6 21Z"/>',
+	"bookmark_add": '<path d="M5 3H14M5 3V21L11 17 17 21V13M17 3V11M13 7H21"/>',
+	"undo": '<path d="M8 5L3 10 8 15M3 10H14A6 6 0 0 1 14 22"/>',
 	"media_library": '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M6 4H18M9 1H15M10 11L16 14 10 17Z"/>',
 	"image": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="M3 18L10 11 14 15 18 10 21 14"/>',
 	"images": '<rect x="7" y="3" width="14" height="14" rx="2"/><path d="M3 7V21H17M8 15L13 10 17 14 20 11"/>',
@@ -13,6 +16,8 @@ const PATHS := {
 	"plus": '<path d="M5 12H19M12 5V19"/>',
 	"play": '<path d="M9 5L20 12 9 19Z" fill="white" stroke="none"/>',
 	"pause": '<path d="M8 5V19M16 5V19" stroke-width="4"/>',
+	"previous_video": '<path d="M6 5V19"/><path d="M19 5L8 12 19 19Z" fill="white" stroke="none"/>',
+	"next_video": '<path d="M18 5V19"/><path d="M5 5L16 12 5 19Z" fill="white" stroke="none"/>',
 	"back": '<path d="M13 6L7 12 13 18M20 6L14 12 20 18"/>',
 	"forward": '<path d="M4 6L10 12 4 18M11 6L17 12 11 18"/>',
 	"folder": '<path d="M3 7V19H21V8H12L10 5H3V7Z"/>',

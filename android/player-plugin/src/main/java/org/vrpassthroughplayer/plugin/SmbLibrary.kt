@@ -6,17 +6,16 @@ import android.net.nsd.NsdServiceInfo
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import jcifs.CIFSContext
-import jcifs.config.PropertyConfiguration
-import jcifs.context.BaseContext
-import jcifs.smb.NtlmPasswordAuthenticator
-import jcifs.smb.SmbFile
-import jcifs.smb.SmbRandomAccessFile
+import org.codelibs.jcifs.smb.CIFSContext
+import org.codelibs.jcifs.smb.config.PropertyConfiguration
+import org.codelibs.jcifs.smb.context.BaseContext
+import org.codelibs.jcifs.smb.impl.NtlmPasswordAuthenticator
+import org.codelibs.jcifs.smb.impl.SmbFile
+import org.codelibs.jcifs.smb.impl.SmbRandomAccessFile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.KeyStore
-import java.util.Properties
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -25,7 +24,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** SMB2/3 shares through jcifs-ng. Servers are saved in app-private storage; passwords are
+/** SMB2/3 shares through CodeLibs JCIFS. Servers are saved in app-private storage; passwords are
  * AES-GCM encrypted with a non-exportable Android Keystore key. Calls block: use a worker.
  * Playback URIs are smb://<server id>/<share>/<path>; [stream] turns them into a loopback
  * HTTP URL so MPV can seek. */
@@ -53,8 +52,7 @@ internal class SmbLibrary(private val context: Context, private val streams: () 
 
     /** Adds or replaces (same id) a server. An empty password keeps the saved one. */
     @Synchronized fun save(request: JSONObject): String {
-        val host = request.getString("host").trim().removePrefix("smb://").trim('/', '\\')
-        require(host.isNotEmpty() && !host.contains('/')) { "SMB host required" }
+        val host = SmbClientPolicy.address(request.getString("host"))
         val id = request.optString("id").ifEmpty { UUID.randomUUID().toString() }
         val previous = servers().firstOrNull { it.id == id }
         val password = request.optString("password").ifEmpty { previous?.password ?: "" }
@@ -80,15 +78,9 @@ internal class SmbLibrary(private val context: Context, private val streams: () 
 
     private fun cifs(server: Server): CIFSContext = synchronized(contexts) {
         contexts.getOrPut(server.id) {
-            val properties = Properties().apply {
-                setProperty("jcifs.smb.client.minVersion", "SMB202")
-                setProperty("jcifs.smb.client.maxVersion", "SMB311")
-                setProperty("jcifs.smb.client.responseTimeout", "15000")
-                setProperty("jcifs.smb.client.connTimeout", "5000")
-                setProperty("jcifs.resolveOrder", "DNS,BCAST")
-            }
+            val properties = SmbClientPolicy.properties(server.user.isEmpty())
             val base = BaseContext(PropertyConfiguration(properties))
-            if (server.user.isEmpty()) base.withGuestCrendentials()
+            if (server.user.isEmpty()) base.withGuestCredentials()
             else base.withCredentials(NtlmPasswordAuthenticator(server.domain, server.user, server.password))
         }
     }
@@ -120,13 +112,13 @@ internal class SmbLibrary(private val context: Context, private val streams: () 
         val server = server(rest.substringBefore('/'))
         val path = rest.substringAfter('/')
         val folder = path.substringBeforeLast('/', "")
-        if (folder.isEmpty()) return emptyList()
+        if (folder.isEmpty() && !server.host.contains('/')) return emptyList()
         val video = path.substringAfterLast('/')
-        val names = SmbFile("smb://${server.host}/$folder/", cifs(server)).use { directory ->
+        val names = SmbFile("smb://${server.host}/" + if (folder.isEmpty()) "" else "$folder/", cifs(server)).use { directory ->
             directory.list().map { it.trimEnd('/') }
         }
         return SidecarAudio.select(video, names).map {
-            SidecarAudio.Track(stream("smb://${rest.substringBefore('/')}/$folder/$it"), SidecarAudio.title(video, it))
+            SidecarAudio.Track(stream("smb://${rest.substringBefore('/')}/" + listOf(folder, it).filter(String::isNotEmpty).joinToString("/")), SidecarAudio.title(video, it))
         }
     }
 
@@ -136,13 +128,13 @@ internal class SmbLibrary(private val context: Context, private val streams: () 
         val server = server(id)
         val path = rest.substringAfter('/')
         val folder = path.substringBeforeLast('/', "")
-        if (folder.isEmpty()) return emptyList()
+        if (folder.isEmpty() && !server.host.contains('/')) return emptyList()
         val video = path.substringAfterLast('/')
-        val names = SmbFile("smb://${server.host}/$folder/", cifs(server)).use { it.list().toList() }
+        val names = SmbFile("smb://${server.host}/" + if (folder.isEmpty()) "" else "$folder/", cifs(server)).use { it.list().toList() }
         return SidecarSubtitles.select(video, names).mapNotNull { name ->
             // One inaccessible subtitle must not hide other tracks or fail video playback.
             runCatching {
-                SidecarSubtitles.Track(stream("smb://$id/$folder/$name"), name)
+                SidecarSubtitles.Track(stream("smb://$id/" + listOf(folder, name).filter(String::isNotEmpty).joinToString("/")), name)
             }.getOrNull()
         }
     }
