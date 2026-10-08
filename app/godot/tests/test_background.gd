@@ -12,6 +12,15 @@ var output := ProjectSettings.globalize_path("res://../../artifacts/background-p
 func check(value: bool, message: String) -> void:
 	checks += 1
 	if not value: failures.append(message)
+func field_tap(menu: Node3D, target: int) -> void:
+	for button in menu._buttons:
+		if button.target == target:
+			var origin: Vector3 = button.node.global_position + button.node.global_basis.z
+			var direction: Vector3 = -button.node.global_basis.z
+			menu.press_pointer("left_hand", origin, direction, true)
+			menu.release_pointer("left_hand", origin, direction, true)
+			return
+
 func _initialize() -> void: call_deferred("_run")
 func settle(background: Node) -> void:
 	var deadline := Time.get_ticks_msec()+15000
@@ -25,9 +34,45 @@ func frame(viewport: SubViewport, name: String) -> Image:
 	image.save_png(output.path_join(name + ".png"))
 	return image
 
+func check_panorama_direction() -> void:
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(256,256)
+	viewport.own_world_3d = true
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(viewport)
+	var world := WorldEnvironment.new()
+	world.environment = Environment.new()
+	viewport.add_child(world)
+	var camera := Camera3D.new()
+	viewport.add_child(camera)
+	# Distinguish the image centre from its joined edges in the real sky renderer.
+	var pixels := Image.create(512,256,false,Image.FORMAT_RGB8)
+	pixels.fill(Color.BLUE)
+	pixels.fill_rect(Rect2i(0,0,64,256),Color.RED)
+	pixels.fill_rect(Rect2i(448,0,64,256),Color.RED)
+	pixels.fill_rect(Rect2i(224,0,64,256),Color.GREEN)
+	var material := PanoramaSkyMaterial.new()
+	material.panorama = ImageTexture.create_from_image(pixels)
+	var sky := Sky.new()
+	sky.sky_material = material
+	var display := XrDisplay.new()
+	display.configure(viewport, world.environment, null, true)
+	display.set_scenery(sky)
+	var front: Image = await frame(viewport,"direction-front")
+	check(front.get_pixel(128,128).g > .8 and front.get_pixel(128,128).r < .1, "Global sky 0 degrees faces the panorama centre")
+	camera.rotation.y = PI
+	var back: Image = await frame(viewport,"direction-back")
+	check(back.get_pixel(128,128).r > .8 and back.get_pixel(128,128).g < .1, "Global panorama seam is behind the viewer")
+	camera.rotation.y = 0
+	display.set_scenery(sky, 180)
+	var rotated: Image = await frame(viewport,"direction-rotated")
+	check(rotated.get_pixel(128,128).r > .8 and rotated.get_pixel(128,128).g < .1, "User 180-degree rotation still rotates relative to the image centre")
+	viewport.queue_free(); await process_frame
+
 func _run() -> void:
 	DirAccess.make_dir_recursive_absolute(folder)
 	DirAccess.make_dir_recursive_absolute(output)
+	if DisplayServer.get_name() != "headless": await check_panorama_direction()
 	var config := ConfigFile.new()
 	config.set_value("appearance", "background", "dark")
 	config.set_value("ui", "language", "zh")
@@ -52,15 +97,15 @@ func _run() -> void:
 	main.recent_menu.section = main.recent_menu.Section.SETTINGS
 	main.recent_menu.tab = main.recent_menu.BACKGROUND_TAB
 	main.recent_menu.refresh()
-	check(main.recent_menu.rows.any(func(row): return row.get("selected",false) and row.get("setting",[])[0] == "background"), "Background selection is marked in existing settings UI")
+	check(main.recent_menu.rows[0].key == "background" and main.recent_menu.rows[0].value == "belfast", "Background selection is shown in one settings field")
 	main.recent_menu.stick_scroll(-1,.25)
 	check(main.background.choice == "belfast", "Menu stick scroll never changes background selection")
-	var dark_row: int = main.recent_menu.rows.find(main.recent_menu.rows.filter(func(row): return row.get("setting",[]) == ["background","dark"])[0])
-	var button: Dictionary = main.recent_menu._buttons.filter(func(b): return b.target == main.recent_menu.ROW_BASE + dark_row)[0]
-	var origin: Vector3 = button.node.global_position + button.node.global_basis.z
-	var direction: Vector3 = -button.node.global_basis.z
-	main.recent_menu.press_pointer("left_hand", origin, direction, true)
-	main.recent_menu.release_pointer("left_hand", origin, direction, true)
+	for target in main.recent_menu.choices.targets:
+		var item: Dictionary = main.recent_menu.choices.targets[target]
+		if item.kind == "open" and item.key == "background": field_tap(main.recent_menu, target); break
+	for target in main.recent_menu.choices.targets:
+		var item: Dictionary = main.recent_menu.choices.targets[target]
+		if item.kind == "choose" and item.key == "background" and item.value == "dark": field_tap(main.recent_menu, target); break
 	check(main.background.choice == "dark", "Same-hand ray/trigger switches background")
 	main._on_setting_changed("background", "belfast")
 	await settle(main.background)
@@ -68,7 +113,7 @@ func _run() -> void:
 	check(config.get_value("appearance","background") == "belfast", "Background choice persists")
 	main._on_setting_changed("background_yaw", true)
 	main._on_setting_changed("background_brightness", true)
-	check(is_equal_approx(main.display.environment.sky_rotation.y, PI/4) and main.background.brightness == 1.25, "Rotation and brightness apply")
+	check(is_equal_approx(main.display.environment.sky_rotation.y, PI + PI/4) and main.background.brightness == 1.25, "Rotation applies relative to panorama centre; brightness still applies")
 	main.background.yaw = 0; main.background.brightness = 1; main.background._apply()
 	if DisplayServer.get_name() != "headless":
 		var shot: Image = await frame(viewport,"settings")

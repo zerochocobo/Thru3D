@@ -26,7 +26,6 @@ internal class MediaSources(
     private val mediaServers = MediaServerLibrary(::context, ::streams, ::nextId, emit = emit)
     fun serverRequest(json: String): Int = mediaServers.request(json)
     fun serverCancel(id: Int) = mediaServers.cancel(id)
-    fun serverAccounts() { host()?.let { NativePanelActivity.open(it, MediaServersActivity::class.java) } }
     fun releaseMediaStream(uri: String) {
         mediaServers.release(uri)
         server?.revoke(uri)
@@ -107,10 +106,6 @@ internal class MediaSources(
         CloudLibrary.start(context() ?: error("Activity unavailable"))
         CloudLibrary.remove(id)
         JSONObject()
-    }
-
-    fun cloudAccounts() {
-        host()?.let { NativePanelActivity.open(it, CloudAccountsActivity::class.java) }
     }
 
     /** MPV-playable location for a library URI; blocks (SMB connects). Worker threads only. */

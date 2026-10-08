@@ -10,6 +10,17 @@ const Recent := preload("res://scripts/recent_files.gd")
 var checks := 0
 var failures: Array[String] = []
 
+class PhotoCacheHost extends RefCounted:
+	var files := 3
+	var bytes := 12582912
+	var clears := 0
+	func photo_cache_usage() -> String:
+		return JSON.stringify({"files": files, "bytes": bytes})
+	func clear_photo_cache() -> bool:
+		clears += 1
+		files = 0; bytes = 0
+		return true
+
 func check(value: bool, message: String) -> void:
 	checks += 1
 	if not value:
@@ -71,6 +82,17 @@ func _run() -> void:
 	check(Thumbnails.has("file:///v.mp4") and menu._confirm == "clear_cache", "First press only arms")
 	menu._choose(menu.rows[menu.rows.find_custom(func(r): return r.has("clear_cache"))])
 	check(not Thumbnails.has("file:///v.mp4") and Thumbnails.usage().x == 0, "Second press clears the cache")
+	var photo_host := PhotoCacheHost.new()
+	menu.platform = photo_host
+	menu._cache_usage = null
+	menu.refresh()
+	var photo_row: Dictionary = menu.rows[menu.rows.find_custom(func(r): return r.has("clear_cache"))]
+	check(not photo_row.empty and menu._cache_usage == Vector2i(3, 12582912), "Photo-only cache is counted and can be cleared without thumbnails")
+	menu._choose(photo_row)
+	check(photo_host.clears == 0, "First press does not delete photo files")
+	menu._choose(menu.rows[menu.rows.find_custom(func(r): return r.has("clear_cache"))])
+	check(photo_host.clears == 1 and menu._cache_usage == Vector2i.ZERO, "Confirmed clear reaches Android and refreshes the remaining size")
+	menu.platform = null
 
 	# Every stable playback source can keep its displayed frame; ephemeral proxies cannot.
 	check(Video._thumbnail_source("smb://nas/a.mp4") and Video._thumbnail_source("content://media/1")

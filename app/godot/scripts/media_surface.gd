@@ -64,7 +64,7 @@ func _apply_geometry() -> void:
 		var aspect := dimensions.x / maxf(1.0, dimensions.y) \
 			/ (2.0 if stereo_sbs and not top_bottom else 1.0) * (2.0 if stereo_sbs and top_bottom else 1.0)
 		if aspect > 0:
-			_screen_base = Vector2(minf(1.9, aspect), minf(1.9, aspect)/aspect)
+			_screen_base = _screen_dimensions(aspect)
 			_flat.size = _screen_base * screen_scale
 		_shape_screen()
 	elif geometry == Geometry.Geometry.EQUIRECT_360 or (geometry == Geometry.Geometry.FISHEYE and fisheye_fov > 180):
@@ -84,6 +84,9 @@ func _apply_geometry() -> void:
 	material.set_shader_parameter("top_bottom", stereo_sbs and top_bottom)
 	material.set_shader_parameter("fisheye_fov", float(fisheye_fov))
 	material.set_shader_parameter("swap_eyes", swap_eyes)
+
+func _screen_dimensions(aspect: float) -> Vector2:
+	return Vector2(minf(1.9, aspect), minf(1.9, aspect) / aspect)
 
 ## Immersive projections are centred on the eyes every frame. Runs on every presented video frame
 ## too, so it must never put the sphere anywhere else (that alternated with _process and shook the view).

@@ -14,9 +14,12 @@ const ThumbnailCache := preload("res://scripts/thumbnail_cache.gd")
 const SETTINGS_PATH := "user://player_settings.cfg"
 const PhotoDisplay := preload("res://scripts/photo_display.gd")
 const PhotoMenu := preload("res://scripts/photo_menu.gd")
+const PhotoHandGestures := preload("res://scripts/photo_hand_gestures.gd")
+const PhotoPalmSwipe := preload("res://scripts/photo_palm_swipe.gd")
 const ImageInfo := preload("res://scripts/image_info.gd")
 const PlayerMenu := preload("res://scripts/player_menu.gd")
 const I18n := preload("res://scripts/i18n.gd")
+const PlatformMethods := preload("res://scripts/platform_methods.gd")
 const Background := preload("res://scripts/app_background.gd")
 const RVM_PROFILES := ["256x144", "384x216", "512x288", "256x256", "384x384", "512x512", "320x320"]
 
@@ -41,6 +44,9 @@ var rvm_status := "RVM benchmark not run"
 var right_controller: XRController3D
 var left_controller: XRController3D
 var hand_pointers := {}
+var photo_hands := PhotoHandGestures.new()
+var photo_swipe := PhotoPalmSwipe.new()
+var _photo_open_hide_controls := false
 var hand_marks := {}
 var input_visuals: Node3D
 var xr_origin: XROrigin3D
@@ -134,10 +140,12 @@ func _ready() -> void:
 	video.thumbnail_ready.connect(_on_video_thumbnail_ready)
 	video.prefer_clone_voice = bool(settings.get_value("audio", "prefer_clone_voice", false))
 	video.history_enabled = bool(settings.get_value("library", "history", true))
+	_restore_seek_settings()
 	video.depth_strength = video.DepthStrength.remembered(float(settings.get_value("video", "depth_strength", 1.0)))
 	video.auto_depth = bool(settings.get_value("effects", "auto_3d", false))
 	video.load_mode_lock(settings.get_value("video", "mode_lock", {}))
 	video.subtitle_distance = float(settings.get_value("subtitles", "distance", 5.0))
+	video.subtitle_position = int(settings.get_value("subtitles", "position", video.SubtitleDepth.DEFAULT_POSITION))
 	video.color_grade.restore(settings.get_value("video", "color_grade", {}))
 	# The flat screen keeps the distance, size and curve the viewer last chose.
 	video.screen_distance = clampf(float(settings.get_value("screen", "distance", video.SCREEN_DISTANCE)),
@@ -150,15 +158,15 @@ func _ready() -> void:
 	video.view_camera = camera
 	photo = PhotoDisplay.new()
 	photo.name = "PhotoDisplay"
-	photo.depth_strength = photo.DepthStrength.remembered(float(settings.get_value("photo", "depth_strength", 1.0)))
-	photo.auto_depth = video.auto_depth
+	photo.depth_strength = photo.DepthStrength.remembered(float(settings.get_value("photo", "depth_strength", 1.0)), photo.DepthStrength.PHOTO_MAX)
+	photo.auto_depth = bool(settings.get_value("effects", "auto_3d", true))
 	photo.load_mode_lock(settings.get_value("photo", "mode_lock", {}))
 	photo.catalog = video.recent_files
 	photo.history_enabled = video.history_enabled
 	photo.changed.connect(_on_photo_changed)
 	photo.screen_distance = clampf(float(settings.get_value("photo_screen", "distance", 2.0)), photo.DISTANCE_LIMITS.x, photo.DISTANCE_LIMITS.y)
 	photo.screen_scale = clampf(float(settings.get_value("photo_screen", "scale", 1.0)), photo.SCALE_LIMITS.x, photo.SCALE_LIMITS.y)
-	photo.screen_curve = clampf(float(settings.get_value("photo_screen", "curve", 0.0)), 0.0, 1.0)
+	photo.screen_curve = clampf(float(settings.get_value("photo_screen", "curve", photo.DEFAULT_CURVE)), 0.0, 1.0)
 	add_child(photo)
 	photo.sharpness = Quality.load_sharpness(settings)
 	photo.view_camera = camera
@@ -183,6 +191,8 @@ func _ready() -> void:
 	player_menu.recent_requested.connect(_show_recent_menu)
 	player_menu.seek_requested.connect(_on_menu_seek)
 	player_menu.bookmark_requested.connect(_on_bookmark_request)
+	player_menu.bookmark_mode_requested.connect(_on_bookmark_mode_requested)
+	player_menu.setting_requested.connect(_on_player_setting)
 	player_menu.volume_requested.connect(_on_menu_volume)
 	player_menu.adjustment_requested.connect(_on_playback_adjustment)
 	player_menu.adjustment_committed.connect(_save_playback_adjustments)
@@ -211,7 +221,7 @@ func _ready() -> void:
 	add_child(background)
 	if Engine.has_singleton("QuestPlayer"):
 		platform_plugin = Engine.get_singleton("QuestPlayer")
-		if platform_plugin.has_method("set_ui_language"):
+		if PlatformMethods.supports(platform_plugin, "set_ui_language"):
 			platform_plugin.set_ui_language(I18n.choice)
 		platform_plugin.connect("capabilities_ready", _on_capabilities_ready)
 		platform_plugin.connect("android_lifecycle", _on_android_lifecycle)
@@ -366,7 +376,8 @@ func _on_pointer_button(action: String, hand: String) -> void:
 				if not _update_menu_pointer(hand, true) and menu == player_menu:
 					var ray: Variant = _ray(hand)
 					# A slider owned by the other hand rejects this press; it is not a screen drag.
-					if ray != null and menu.ray_hit(ray[0], ray[1]).is_empty(): _begin_grab(hand)
+					if ray != null and menu.ray_hit(ray[0], ray[1]).is_empty():
+						_begin_grab(hand)
 			"by_button": menu.dismiss()
 		return
 	if photo_active:
@@ -428,27 +439,51 @@ func _process(delta: float) -> void:
 	var left := _stick(left_controller)
 	_update_corner_hover()
 	_update_flat_grab_stick(left, right, delta)
+	_process_sticks(left, right, delta)
+
+func _process_sticks(left: Vector2, right: Vector2, delta: float) -> void:
 	var menu := _active_menu()
 	if menu:
-		stick_controls.left_latched = true
-		stick_controls.right_latched = true
-		stick_controls.right_zooming = false
 		_update_menu_pointer("left_hand")
 		_update_menu_pointer("right_hand")
-		# Either stick scrolls a list (never selects); playback shortcuts stay off while a menu is open.
-		if menu.has_method("stick_scroll"):
+	if not _input_focused():
+		stick_controls.suspend()
+		return
+	if photo_active and photo.geometry == Geometry.Geometry.FLAT and not photo_hands.owners.is_empty():
+		stick_controls.suspend()
+		return
+	if menu and (menu != player_menu or photo_active or not player_menu.allows_playback_sticks()):
+		stick_controls.suspend()
+		# Either stick scrolls a list, never selects or controls playback at the same time.
+		if menu.has_method("stick_scroll") and (menu != player_menu or not player_menu.has_pointer_capture()):
 			menu.stick_scroll(left.y if absf(left.y) > absf(right.y) else right.y, delta)
-		if menu == player_menu:
-			if not player_menu._hover.is_empty():
-				_menu_touched_ms = Time.get_ticks_msec()
-			elif player_menu.section == 0 and not player_menu._mode_open and (photo_active or not player_menu.bookmarks.opened) and (not photo_active or not photo_menu._gallery_open) and (photo_active or video.control.snapshot().get("state", "") == "playing") and Time.get_ticks_msec() - _menu_touched_ms > CONTROLS_HIDE_MS:
-				player_menu.dismiss()
+		_update_controls_visibility(menu)
 		return
 	var actions := stick_controls.poll(left, right, video != null and (photo_active or _viewer().geometry != Geometry.Geometry.FLAT))
 	if not _grab.is_empty():
 		# Holding the picture: only zoom; other stick shortcuts wait for the stick to recenter.
 		actions = actions.filter(func(action): return action.operation == "zoom")
 	_apply_stick_actions(actions, delta)
+	if menu == player_menu and menu != null:
+		if not actions.is_empty():
+			_menu_touched_ms = Time.get_ticks_msec()
+			player_menu.refresh_values()
+		_update_controls_visibility(menu)
+
+func _update_controls_visibility(menu: Node3D) -> void:
+	if menu != player_menu or menu == null or not menu.visible: return
+	var now := Time.get_ticks_msec()
+	if menu.has_pointer_capture() or menu._hover.values().any(func(target): return int(target) != menu.NONE):
+		_menu_touched_ms = now
+		return
+	# Keep popups, sliders and pending seeks visible; use media state, not the seek queue's state.
+	if menu.section != 0 or menu._mode_open or not menu._adjustment.is_empty() or menu._volume_open or menu._depth_open: return
+	if photo_active:
+		if photo_menu._gallery_open: return
+	else:
+		if not menu.choices.opened.is_empty() or menu._subtitle_open or menu.bookmarks.opened or not video.requested_play or video.media.state != "playing" \
+			or video.control.pending or video.control.in_flight > 0: return
+	if now - _menu_touched_ms > CONTROLS_HIDE_MS: menu.dismiss()
 
 func _stick(controller: XRController3D) -> Vector2:
 	return controller.get_vector2("primary") if controller and controller.get_is_active() and _controller_allowed(str(controller.tracker)) else Vector2.ZERO
@@ -456,13 +491,20 @@ func _stick(controller: XRController3D) -> Vector2:
 func _hand_tracker(hand: String) -> XRHandTracker:
 	return XRServer.get_tracker("/user/hand_tracker/" + ("left" if hand == "left_hand" else "right")) as XRHandTracker
 
+func _hand_action_tracker(hand: String) -> XRPositionalTracker:
+	return XRServer.get_tracker(hand) as XRPositionalTracker
+
+func _meta_aim_tracker(hand: String) -> XRPositionalTracker:
+	return XRServer.get_tracker("/user/fbhandaim/" + ("left" if hand == "left_hand" else "right")) as XRPositionalTracker
+
 func _input_focused() -> bool:
 	return display.preview or display.session_state == "session_focussed"
 
 func _controller_allowed(hand: String) -> bool:
 	if not _input_focused(): return false
 	# Query current data too: XR input signals may arrive before our process callback.
-	return not HandPointer.is_optical(_hand_tracker(hand)) and not (hand_pointers.has(hand) and hand_pointers[hand].source == "hand")
+	return not HandPointer.is_optical(_hand_tracker(hand)) and not HandPointer.is_hand_profile(_hand_action_tracker(hand)) \
+		and not (hand_pointers.has(hand) and hand_pointers[hand].source == "hand")
 
 func _controller_ray(hand: String) -> Variant:
 	var controller := left_controller if hand == "left_hand" else right_controller
@@ -473,27 +515,64 @@ func _controller_ray(hand: String) -> Variant:
 
 func _update_hand_input(delta: float) -> void:
 	if input_visuals: input_visuals.update_visibility(_input_focused() and _head_tracked())
+	var inputs := {}
 	for hand in hand_pointers:
 		var sample := {}
+		var point: Variant = null
 		if _input_focused():
 			var tracker := _hand_tracker(hand)
 			if HandPointer.is_optical(tracker) and xr_camera and xr_origin and _head_tracked():
 				sample = HandPointer.sample(tracker, hand, xr_camera.global_transform,
-					xr_origin.global_transform * XRServer.get_reference_frame(), XRServer.world_scale)
+					xr_origin.global_transform * XRServer.get_reference_frame(), XRServer.world_scale,
+					_meta_aim_tracker(hand), _hand_action_tracker(hand))
+				point = HandPointer.pinch_position(tracker, xr_origin.global_transform * XRServer.get_reference_frame(), XRServer.world_scale)
+			elif HandPointer.is_hand_profile(_hand_action_tracker(hand)):
+				# A hand-only action profile with missing optical tracking is not a controller.
+				sample = {"source": "hand", "provider": "hand_profile"}
 			elif not HandPointer.is_optical(tracker):
 				var ray: Variant = _controller_ray(hand)
 				if ray != null: sample = {"source": "controller", "ray": ray}
 		var event: Dictionary = hand_pointers[hand].update(sample, delta)
 		if event.cancelled: _cancel_pointer(hand)
-		if event.pressed: _on_pointer_button("trigger_click", hand)
-		if event.released: _on_pointer_release("trigger_click", hand)
+		if event.menu and hand == "left_hand": _on_pointer_button("menu_button", hand)
+		var pointer: RefCounted = hand_pointers[hand]
+		inputs[hand] = event.merged({"source": pointer.source, "tracked": pointer.ray != null,
+			"down": pointer.down, "position": point})
 		if hand_marks.has(hand):
-			var pointer: RefCounted = hand_pointers[hand]
 			var mark: MeshInstance3D = hand_marks[hand]
 			mark.visible = pointer.source == "hand" and pointer.ray != null and not _active_menu()
 			if mark.visible:
 				mark.global_position = pointer.ray[0]
 				mark.scale = Vector3.ONE * XRServer.world_scale * (0.65 if pointer.down else 1.0)
+	_dispatch_hand_input(inputs, delta)
+
+func _is_photo_hand(hand: String) -> bool:
+	return photo_active and photo != null and photo.geometry == Geometry.Geometry.FLAT \
+		and hand_pointers.has(hand) and hand_pointers[hand].source == "hand"
+
+func _dispatch_hand_input(inputs: Dictionary, _delta: float = 1.0 / 72.0) -> void:
+	var flat_photo: bool = photo_active and photo != null and photo.geometry == Geometry.Geometry.FLAT
+	var enabled: bool = flat_photo and photo.panel.visible and _input_focused() and not _active_menu() and _grab.is_empty()
+	var pose := xr_camera.global_basis if xr_camera else Basis.IDENTITY
+	var result: Dictionary = photo_hands.update(inputs, enabled,
+		(photo.magnification if photo.inspect else photo.screen_scale) if flat_photo else 1.0,
+		pose, XRServer.world_scale, photo._serial if photo else -1)
+	for action in result.actions:
+		match action.operation:
+			"tap": _show_player_menu()
+			"navigate":
+				var accepted: bool = photo.navigate(int(action.direction))
+				if action.has("hand"): Log.record("photo_pinch_navigation", {"hand":action.hand, "direction":action.direction, "accepted":accepted})
+			"zoom":
+				var was_zoomed: bool = photo.hand_zoomed()
+				photo.finish_transition(); photo.set_hand_scale(float(action.value))
+				if was_zoomed and not photo.hand_zoomed(): _place_screen()
+			"finish":
+				if not photo.inspect: _save_screen()
+	for hand in inputs:
+		if hand in result.consumed: continue
+		if inputs[hand].get("pressed", false): _on_pointer_button("trigger_click", hand)
+		if inputs[hand].get("released", false): _on_pointer_release("trigger_click", hand)
 
 func _cancel_pointer(hand: String) -> void:
 	if not _grab.is_empty() and _grab.hand == hand:
@@ -506,6 +585,8 @@ func _cancel_pointer(hand: String) -> void:
 
 func _on_input_session_changed() -> void:
 	if _input_focused(): return
+	photo_hands.cancel()
+	photo_swipe.cancel()
 	for hand in hand_pointers:
 		hand_pointers[hand].update({}, 0)
 		_cancel_pointer(hand)
@@ -515,7 +596,7 @@ func _hand_input_report() -> Dictionary:
 	var report := {}
 	for hand in hand_pointers:
 		var pointer: RefCounted = hand_pointers[hand]
-		report[hand] = {"source": pointer.source, "tracked": pointer.ray != null, "pinching": pointer.down}
+		report[hand] = {"source": pointer.source, "provider": pointer.provider, "tracked": pointer.ray != null, "pinching": pointer.down}
 	return report
 
 # --- dragging the picture -------------------------------------------------------------------
@@ -562,6 +643,7 @@ func _update_corner_hover() -> void:
 		corner = int(_grab.resize.corner)
 	elif _grab.is_empty() and not recent_menu.visible and not _viewer().local_uri.is_empty() and not (photo_active and photo.inspect):
 		for hand in ["right_hand", "left_hand"]:
+			if _is_photo_hand(hand): continue
 			var ray: Variant = _ray(hand)
 			if ray != null and not (player_menu.visible and player_menu._hover.get(hand, -1) != -1):
 				corner = _viewer().corner_at(ray[0], ray[1])
@@ -578,6 +660,9 @@ func _begin_grab(hand: String) -> void:
 		return
 	var angles := _ray_angles(ray[1])
 	_grab = {"hand": hand, "start": angles, "last": angles, "moved": false}
+	if _is_photo_hand(hand):
+		_grab["tap_only"] = true
+		return
 	if photo_active and photo.inspect:
 		photo.inspect_ray(ray[0], ray[1])
 		_grab["inspect"] = true
@@ -598,6 +683,7 @@ func _begin_grab(hand: String) -> void:
 func _update_grab() -> void:
 	if _grab.is_empty():
 		return
+	if _grab.get("tap_only", false): return
 	var ray: Variant = _ray(_grab.hand)
 	if ray == null \
 		or not video or _viewer().local_uri.is_empty() or recent_menu.visible:
@@ -682,7 +768,10 @@ func _update_menu_pointer(hand: String, pressed: bool = false) -> bool:
 	var direction: Vector3 = ray[1] if tracked else Vector3.ZERO
 	if pressed:
 		_menu_touched_ms = Time.get_ticks_msec()
-		return menu.press_pointer(hand, origin, direction, tracked)
+		var handled: bool = menu.press_pointer(hand, origin, direction, tracked)
+		if menu != player_menu or photo_active or not player_menu.allows_playback_sticks():
+			stick_controls.suspend()
+		return handled
 	menu.update_pointer(hand, origin, direction, tracked)
 	return true
 
@@ -697,14 +786,16 @@ func _on_library_chosen(uri: String, title: String) -> void:
 	recent_menu.dismiss()
 	if player_menu: player_menu.dismiss()
 	_grab = {}
-	stick_controls.left_latched = true; stick_controls.right_latched = true
+	stick_controls.suspend()
 	if is_photo:
 		video.close_video()
 		photo_active = true
 		player_menu = photo_menu
+		_photo_open_hide_controls = hand_pointers.values().any(func(pointer): return pointer.source == "hand")
 		photo.open_image(uri, title, recent_menu.image_queue())
 		_show_player_menu()
 	else:
+		_photo_open_hide_controls = false
 		photo.close_image()
 		photo_active = false
 		player_menu = video_menu
@@ -729,15 +820,16 @@ func _navigate_video(direction: int) -> void:
 	var item := _adjacent_video(direction)
 	if item.is_empty(): return
 	_grab = {}
-	stick_controls.left_latched = true
-	stick_controls.right_latched = true
-	stick_controls.right_zooming = false
+	stick_controls.suspend()
 	_menu_touched_ms = Time.get_ticks_msec()
 	video.open_library(str(item.uri), str(item.title), item.get("metadata", {}))
 	if player_menu and player_menu.visible: player_menu.refresh()
 
 func _on_photo_changed() -> void:
 	if not photo_active: return
+	if _photo_open_hide_controls and not photo.loading and photo.panel.visible:
+		_photo_open_hide_controls = false
+		if photo.geometry == Geometry.Geometry.FLAT: photo_menu.dismiss()
 	_update_thumbnail_protection()
 	_update_background()
 	if player_menu and player_menu.visible: player_menu.refresh_values()
@@ -835,12 +927,18 @@ func _show_recent_menu() -> void:
 		_place_menu(recent_menu)
 		recent_menu.toggle()
 
+func _restore_seek_settings() -> void:
+	video.seek_mode = video.SeekPolicy.normalize(settings.get_value("video", "seek_mode", video.SeekPolicy.SPEED))
+	video.bookmark_seek_mode = video.SeekPolicy.bookmark_override(settings.get_value("video", "bookmark_seek_mode", video.SeekPolicy.GLOBAL))
+
 func _library_settings() -> Dictionary:
 	return {"output_width": int(settings.get_value("video", "output_width", 0)),
 		"display_quality": display_quality, "display_quality_pending": not is_equal_approx(display.render_scale, Quality.SCALES[display_quality]),
 		"sharpness": Quality.load_sharpness(settings),
 		"history": video.history_enabled,
+		"seek_mode": video.SeekPolicy.normalize(video.seek_mode),
 		"subtitle_distance": video.subtitle_distance,
+		"subtitle_position": video.subtitle_position,
 		"background": background.choice if background else "belfast",
 		"background_custom": background.has_custom() if background else false,
 		"background_title": background.custom_title if background else "",
@@ -852,6 +950,10 @@ func _library_settings() -> Dictionary:
 
 func _on_setting_changed(key: String, value: Variant) -> void:
 	match key:
+		"seek_mode":
+			video.seek_mode = video.SeekPolicy.normalize(value)
+			settings.set_value("video", "seek_mode", video.seek_mode)
+			settings.save(settings_path)
 		"restart_app", "quit_app":
 			_finish_app(key == "restart_app")
 		"display_quality":
@@ -867,8 +969,14 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 			settings.save(settings_path)
 		"background":
 			if background.select(str(value)): _save_background()
-		"background_yaw": background.rotate_sky(); _save_background()
-		"background_brightness": background.cycle_brightness(); _save_background()
+		"background_yaw":
+			if value is bool: background.rotate_sky()
+			else: background.set_yaw(float(value))
+			_save_background()
+		"background_brightness":
+			if value is bool: background.cycle_brightness()
+			else: background.set_brightness(float(value))
+			_save_background()
 		"output_width":
 			settings.set_value("video", "output_width", int(value))
 			settings.save(settings_path)
@@ -885,7 +993,7 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 			settings.set_value("ui", "language", str(value))
 			settings.save(settings_path)
 			I18n.use(str(value))
-			if platform_plugin and platform_plugin.has_method("set_ui_language"):
+			if PlatformMethods.supports(platform_plugin, "set_ui_language"):
 				platform_plugin.set_ui_language(I18n.choice)
 			for menu in [recent_menu, player_menu, photo_menu]:
 				if menu.visible:
@@ -893,6 +1001,10 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 		"subtitle_distance":
 			video.subtitle_distance = float(value)
 			settings.set_value("subtitles", "distance", video.subtitle_distance)
+			settings.save(settings_path)
+		"subtitle_position":
+			video.subtitle_position = int(value)
+			settings.set_value("subtitles", "position", video.subtitle_position)
 			settings.save(settings_path)
 	Log.record("setting_changed", {"key": key, "value": value})
 
@@ -902,6 +1014,8 @@ func _on_menu_action(operation: String) -> void:
 		return
 	match operation:
 		"open_file": _show_recent_menu()
+		"seek_mode":
+			_on_setting_changed("seek_mode", video.SeekPolicy.EXACT if video.seek_mode == video.SeekPolicy.SPEED else video.SeekPolicy.SPEED)
 		"play": video.toggle_play()
 		"alpha": video.set_alpha(not video.alpha_wanted())
 		"depth":
@@ -948,6 +1062,25 @@ func _on_menu_seek(position_ms: int) -> void:
 	if photo_active: return
 	video.seek_absolute(position_ms)
 
+func _on_player_setting(key: String, value: Variant) -> void:
+	if photo_active: return
+	match key:
+		"seek_mode", "subtitle_distance", "subtitle_position": _on_setting_changed(key, value)
+		"loop": video.loop_enabled = bool(value); video.changed.emit()
+		"screen_curve": video.set_screen_curve(float(value)); _save_screen(); video.changed.emit()
+		"audio_track":
+			if video.select_audio_track(int(value)):
+				settings.set_value("audio", "prefer_clone_voice", video.prefer_clone_voice)
+				settings.save(settings_path)
+
+func _on_bookmark_mode_requested(mode: String, scope: String) -> void:
+	if photo_active or scope != video.bookmark_scope() or mode not in [video.SeekPolicy.GLOBAL, video.SeekPolicy.SPEED, video.SeekPolicy.EXACT]: return
+	_menu_touched_ms = Time.get_ticks_msec()
+	video.bookmark_seek_mode = mode
+	settings.set_value("video", "bookmark_seek_mode", mode)
+	settings.save(settings_path)
+	Log.record("setting_changed", {"key": "bookmark_seek_mode", "value": mode})
+
 func _on_bookmark_request(operation: String, marker_id: String, scope: String) -> void:
 	if photo_active: return
 	_menu_touched_ms = Time.get_ticks_msec()
@@ -983,6 +1116,14 @@ func _menu_state() -> Dictionary:
 	if not video:
 		return {}
 	var details: Dictionary = video.media.playback.get("details", {})
+	var audio_options: Array = [{"value": -1, "label": "Auto"}]
+	for track in details.get("audio_tracks", []):
+		if track is Dictionary and int(track.get("id", 0)) > 0:
+			var label := _audio_option_label(track)
+			var option := {"value": int(track.id), "label": label, "hint": label}
+			if track.get("external", false) and str(track.get("title", "")) == "Clone voice": audio_options.insert(1, option)
+			else: audio_options.append(option)
+	audio_options.append({"value": 0, "label": "Off"})
 	var text_tracks: Array[Dictionary] = []
 	for track in details.get("subtitle_tracks", []):
 		if track is Dictionary and Video.SubtitleState.text_codec(str(track.get("codec", ""))):
@@ -997,11 +1138,13 @@ func _menu_state() -> Dictionary:
 		"mode_lock": video.mode_lock,
 		"volume": video.audio_volume, "muted": video.audio_muted,
 		"audio_available": details.get("audio_tracks", []).size() > 0,
+		"audio_options": audio_options, "audio_track_id": video.audio_track_id,
 		"audio_tracks": details.get("audio_tracks", []).size(), "audio_track": _audio_track_name(details),
 		"clone_voice": video.clone_voice_track() > 0, "clone_voice_active": video.clone_voice_active(),
 		"depth_requested": video.depth_requested, "depth_enabled": video.depth_enabled, "depth_strength": video.depth_strength,
 		"screen_curve": video.screen_curve, "screen_distance": video.screen_distance,
 		"subtitle_distance": video.subtitle_distance, "color_grade": video.color_grade.snapshot(),
+		"subtitle_position": video.subtitle_position,
 		"grade_values": video.color_grade.values(),
 		"depth_error": str(video.media.playback.get("depth_error", "")),
 		"text_subtitle_tracks": text_tracks.size(), "subtitle_options": text_tracks,
@@ -1015,12 +1158,24 @@ func _menu_state() -> Dictionary:
 	result.merge(video.bookmarks_snapshot())
 	return result
 
-## The selected track's title (external tracks such as the clone voice have one), else its id.
+## Preserve native titles/IDs for sidecar recognition; localize their presentation only.
+func _audio_option_label(track: Dictionary) -> String:
+	if track.get("external", false) and str(track.get("title", "")) == "Clone voice": return I18n.t("Dubbing")
+	var title := str(track.get("title", "")).replace("\n", " ").replace("\r", " ").strip_edges()
+	var language := str(track.get("language", "")).replace("_", "-").to_lower().split("-")[0]
+	var names := {"en": "English", "eng": "English", "zh": "Chinese", "zho": "Chinese", "chi": "Chinese",
+		"ja": "Japanese", "jpn": "Japanese", "fr": "French", "fra": "French", "fre": "French",
+		"de": "German", "deu": "German", "ger": "German", "es": "Spanish", "spa": "Spanish",
+		"ko": "Korean", "kor": "Korean", "ru": "Russian", "rus": "Russian"}
+	var language_label := I18n.t(str(names.get(language, language))) if language not in ["", "und"] else ""
+	if title.is_empty(): title = I18n.t("Track %d") % int(track.get("id", 0))
+	return title + (" · " + language_label if not language_label.is_empty() else "")
+
 func _audio_track_name(details: Dictionary) -> String:
 	var current := str(details.get("audio_track_id", ""))
 	for track in details.get("audio_tracks", []):
-		if track is Dictionary and str(track.get("id", "")) == current and not str(track.get("title", "")).is_empty():
-			return str(track.title)
+		if track is Dictionary and str(track.get("id", "")) == current:
+			return _audio_option_label(track)
 	return current if not current.is_empty() else "Auto"
 
 func _menu_error() -> String:
@@ -1172,6 +1327,8 @@ func _on_custom_background_saved(path: String, title: String, orientation: int) 
 	if background.choice == "custom" and photo_active: photo.close_image()
 
 func _recenter() -> void:
+	photo_hands.cancel()
+	photo_swipe.cancel()
 	if not display.preview:
 		XRServer.center_on_hmd(XRServer.RESET_BUT_KEEP_TILT, true)
 	# The view moves once the runtime applies the recenter: then bring the screen and menus in front of it.
@@ -1277,6 +1434,8 @@ func _on_playback_adjustment(key: String, value: Variant) -> void:
 		return
 	elif key == "subtitle_distance":
 		video.subtitle_distance = float(value)
+	elif key == "subtitle_position":
+		video.subtitle_position = int(value)
 	elif key == "grade_preset":
 		video.color_grade.select(str(value))
 	elif key == "grade_reset":
@@ -1288,19 +1447,29 @@ func _on_playback_adjustment(key: String, value: Variant) -> void:
 func _save_playback_adjustments() -> void:
 	settings.set_value("screen", "distance", video.screen_distance)
 	settings.set_value("subtitles", "distance", video.subtitle_distance)
+	settings.set_value("subtitles", "position", video.subtitle_position)
 	settings.set_value("video", "color_grade", video.color_grade.snapshot())
 	settings.save(settings_path)
+
+var seek_policy_probe_result: Dictionary = {}
 
 func _on_display_debug_command(_id: int, payload: String) -> void:
 	var command: Variant = JSON.parse_string(payload)
 	if not command is Dictionary: return
 	var operation := str(command.get("operation", ""))
-	if operation in ["display_quality", "sharpness"]:
+	if operation == "seek_policy_ui" and OS.is_debug_build():
+		var probe := preload("res://scripts/seek_policy_device_probe.gd").new()
+		seek_policy_probe_result = probe.run(self, str(command.step), str(command.get("marker_id", "")))
+		seek_policy_probe_result.request_key = str(command.request_key)
+		video._write_debug_report()
+	elif operation in ["display_quality", "sharpness"]:
 		_on_setting_changed(operation, command.get("value", 0))
 	elif operation in ["restart_app", "quit_app"]:
 		recent_menu._activate(recent_menu.RESTART_APP if operation == "restart_app" else recent_menu.QUIT_APP)
 	elif operation == "cloud_accounts":
-		platform_plugin.media_cloud_accounts()
+		_show_recent_menu()
+		recent_menu.section = recent_menu.Section.CLOUD
+		recent_menu.account_panel.open("cloud", true)
 	elif operation == "cloud_page_probe" and OS.is_debug_build():
 		var probe := preload("res://scripts/cloud_page_probe.gd").new()
 		add_child(probe)
@@ -1322,7 +1491,7 @@ func _finish_app(restart: bool) -> void:
 	photo.close_image()
 	settings.save(settings_path)
 	DiagnosticLog.record("app_restart" if restart else "app_close")
-	if platform_plugin and platform_plugin.has_method("finish_app"):
+	if PlatformMethods.supports(platform_plugin, "finish_app"):
 		platform_plugin.finish_app(restart)
 	else:
 		if restart: OS.set_restart_on_exit(true)

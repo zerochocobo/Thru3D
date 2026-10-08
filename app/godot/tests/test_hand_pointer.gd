@@ -63,6 +63,7 @@ func _initialize() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	check_runtime_input()
 	var pointer := Hand.new()
 	check(not settle(pointer, sample(0.1)).pressed, "Already pinched on acquisition does not click")
 	settle(pointer, sample(0.8))
@@ -196,6 +197,65 @@ func _run() -> void:
 	frames(main, tracker, center + Vector3(0.12, 0, 0), 0.1)
 	frames(main, tracker, center + Vector3(0.12, 0, 0), 0.8)
 	check(viewer.turned.length() > 0.01 and not player.visible, "Held pinch moves picture without opening controls on release")
+	# Follow the actual Vendors tracker contract through Main, even when joint flags
+	# cannot support the fallback. No middle finger pose participates in selection.
+	var aim := make_aim()
+	XRServer.add_tracker(aim)
+	for joint in Hand.JOINTS: tracker.set_hand_joint_flags(joint, 0)
+	var native_target := row - Vector3(0, 0, 1)
+	var native_pose := Transform3D(Basis(Quaternion(Vector3.FORWARD, (native_target - center).normalized())), center)
+	aim.set_pose("default", native_pose, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_LOW)
+	library.toggle()
+	initial_picks = picks
+	for pinch in [false, true, false]:
+		aim.set_input("index_pinch", pinch)
+		for frame in 2:
+			main._update_hand_input(1.0 / 72)
+			main._update_menu_pointer("right_hand")
+	check(picks == initial_picks + 1 and other.provider == "meta_aim", "Official Quest aim and pinch dispatch select once without joint-distance recognition")
+	check(not main._controller_allowed("right_hand"), "Official pinch cannot double-dispatch the emulated trigger")
+	XRServer.remove_tracker(aim)
+	var action_hand := make_action_hand(Hand.HAND_PROFILES[0])
+	XRServer.add_tracker(action_hand)
+	action_hand.set_pose("aim", native_pose, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_HIGH)
+	if not library.visible: library.toggle()
+	initial_picks = picks
+	for pinch in [false, true, false]:
+		action_hand.set_input("trigger_click", pinch)
+		for frame in 2:
+			main._update_hand_input(1.0 / 72)
+			main._update_menu_pointer("right_hand")
+	check(picks == initial_picks + 1 and other.provider == "hand_profile", "Runtime hand interaction aim/select dispatch also selects exactly once")
+	tracker.has_tracking_data = false
+	main._update_hand_input(1.0 / 72)
+	check(other.ray == null and not main._controller_allowed("right_hand"), "Hand action profile with lost optical tracking cannot become controller input")
+	XRServer.remove_tracker(action_hand)
+	tracker.has_tracking_data = true
+	library.dismiss()
+	player.dismiss()
+	var left_optical := make_tracker()
+	left_optical.name = "/user/hand_tracker/left"
+	var left_aim := make_aim()
+	left_aim.name = "/user/fbhandaim/left"
+	XRServer.add_tracker(left_optical)
+	XRServer.add_tracker(left_aim)
+	main.hand_pointers["left_hand"] = Hand.new()
+	main._update_hand_input(1.0 / 72)
+	left_aim.set_input("menu_gesture", true)
+	left_aim.set_input("menu_pressed", true)
+	left_aim.set_input("index_pinch", true)
+	main._update_hand_input(1.0 / 72)
+	check(player.visible and main._grab.is_empty(), "Left official palm menu pinch opens controls without a picture grab")
+	main._update_hand_input(1.0 / 72)
+	check(player.visible, "Holding left official menu pinch cannot toggle twice")
+	left_aim.set_input("menu_pressed", false)
+	main._update_hand_input(1.0 / 72)
+	left_aim.set_input("menu_pressed", true)
+	main._update_hand_input(1.0 / 72)
+	check(not player.visible, "Second official menu pinch closes controls")
+	XRServer.remove_tracker(left_aim)
+	XRServer.remove_tracker(left_optical)
+	main.hand_pointers.erase("left_hand")
 	main._grab = {"hand": "right_hand", "moved": false}
 	other.ray = null
 	main._on_pointer_release("trigger_click", "right_hand")
@@ -218,3 +278,105 @@ func _run() -> void:
 	FileAccess.open("res://../../artifacts/hand-input/verification.json", FileAccess.WRITE).store_string(JSON.stringify({"checks": checks, "failures": failures, "physical_tracking": "not_verified"}, "\t"))
 	print("Hand pointer checks: %s (%d)" % ["passed" if failures.is_empty() else "FAILED", checks])
 	quit(0 if failures.is_empty() else 1)
+
+func make_aim() -> XRControllerTracker:
+	var aim := XRControllerTracker.new()
+	aim.name = "/user/fbhandaim/right"
+	aim.set_pose("default", Transform3D(Basis.IDENTITY, Vector3(0.2, 1.3, -0.5)), Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_LOW)
+	aim.set_input("index_pinch", false)
+	aim.set_input("index_pinch_strength", 0.0)
+	return aim
+
+func make_action_hand(profile: String) -> XRControllerTracker:
+	var tracker := XRControllerTracker.new()
+	tracker.name = "right_hand"
+	tracker.set_tracker_profile(profile)
+	tracker.set_pose("aim", Transform3D(Basis.IDENTITY, Vector3(0.2, 1.3, -0.5)), Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_HIGH)
+	tracker.set_input("trigger_click", false)
+	return tracker
+
+func check_runtime_input() -> void:
+	check(ProjectSettings.get_setting("xr/openxr/extensions/meta/hand_tracking_aim", false), "Meta official aim enabled")
+	check(ProjectSettings.get_setting("xr/openxr/extensions/hand_interaction_profile", false), "Standard hand interaction enabled")
+	var optical := make_tracker()
+	var aim := make_aim()
+	var pointer := Hand.new()
+	var head := Transform3D(Basis.IDENTITY, Vector3(0, 1.6, 0))
+	for joint in Hand.JOINTS: optical.set_hand_joint_flags(joint, 0)
+	for middle in [Vector3(0.2, 1.7, -0.5), Vector3(0.2, 1.4, -0.65), Vector3(0.2, 1.3, -0.5)]:
+		optical.set_hand_joint_transform(XRHandTracker.HAND_JOINT_MIDDLE_FINGER_TIP, Transform3D(Basis.IDENTITY, middle))
+		var data := Hand.sample(optical, "right_hand", head, Transform3D.IDENTITY, 1, aim)
+		check(data.has("ray") and data.provider == "meta_aim" and not data.pinched, "Official selection independent of middle finger and fallback joint validity")
+	var space := Transform3D(Basis(Vector3.UP, 0.6), Vector3(3, 0, -2))
+	var data := Hand.runtime_sample(aim, space, 2, true)
+	check(data.ray[0].is_equal_approx(space * (aim.get_pose("default").transform.origin * 2)), "Official aim world scale/recenter applied once")
+	check(data.ray[1].is_equal_approx(space.basis * Vector3.FORWARD), "Official ray orientation preserved")
+	aim.set_input("index_pinch", true)
+	check(not pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014).pressed, "Acquiring a pinched runtime hand does not click")
+	aim.set_input("index_pinch", false)
+	pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	check(pointer.armed, "Runtime unselected state rearms")
+	aim.set_input("index_pinch", true)
+	check(pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014).pressed, "Runtime select takes effect without an extra 60ms delay")
+	check(not pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014).pressed, "Held runtime selection does not repeat")
+	aim.set_input("index_pinch", false)
+	check(pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014).released, "Runtime unselect releases immediately")
+	var moved := aim.get_pose("default").transform
+	moved.origin.x += 0.12
+	aim.set_pose("default", moved, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_LOW)
+	pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	check(pointer.ray[0].is_equal_approx(moved.origin), "Runtime aim is not smoothed a second time")
+	aim.set_input("index_pinch", true)
+	pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	aim.set_pose("default", moved, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_NONE)
+	data = Hand.sample(optical, "right_hand", head, Transform3D.IDENTITY, 1, aim)
+	var event := pointer.update(data, 0.014)
+	check(data.provider == "meta_aim" and not data.has("ray") and event.cancelled and not event.released, "Invalid official pose cancels without switching to joint recognition")
+	aim.set_pose("default", moved, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_LOW)
+	check(not pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014).pressed, "Official tracking recovery still requires unselect before select")
+	aim.set_input("index_pinch", false)
+	pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	aim.set_input("index_pinch", true)
+	pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	aim.set_input("system_gesture", true)
+	event = pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	check(event.cancelled and not event.released and pointer.ray == null, "System palm gesture cancels application selection and drag")
+	aim.set_input("system_gesture", false)
+	aim.set_input("menu_gesture", true)
+	aim.set_input("menu_pressed", true)
+	event = pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014)
+	check(event.menu and not event.pressed and pointer.ray == null, "Official menu gesture emits menu rather than content selection")
+	check(not pointer.update(Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true), 0.014).menu, "Held official menu event does not repeat")
+	aim.set_input("menu_gesture", false)
+	aim.set_input("menu_pressed", false)
+	check(not Hand.runtime_sample(aim, Transform3D.IDENTITY, NAN, true).has("ray"), "Invalid world scale cannot produce runtime ray")
+	var nonfinite := moved
+	nonfinite.origin.x = NAN
+	aim.set_pose("default", nonfinite, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_LOW)
+	check(not Hand.runtime_sample(aim, Transform3D.IDENTITY, 1, true).has("ray"), "Nonfinite official aim is rejected")
+	for profile in Hand.HAND_PROFILES + [Hand.SIMPLE_PROFILE]:
+		var interaction := make_action_hand(profile)
+		data = Hand.sample(optical, "right_hand", head, Transform3D.IDENTITY, 1, null, interaction)
+		check(data.provider == "hand_profile" and data.has("ray"), "Optical hand uses runtime profile: " + profile)
+		interaction.set_input("trigger_click", true)
+		check(Hand.sample(optical, "right_hand", head, Transform3D.IDENTITY, 1, null, interaction).pinched, "Mapped runtime selection overrides joint distances: " + profile)
+	var controller := make_action_hand("/interaction_profiles/oculus/touch_controller")
+	check(Hand.sample(optical, "right_hand", head, Transform3D.IDENTITY, 1, null, controller).provider == "joints", "Physical controller profile cannot provide native hand selection")
+	optical.hand_tracking_source = XRHandTracker.HAND_TRACKING_SOURCE_CONTROLLER
+	check(Hand.sample(optical, "right_hand", head, Transform3D.IDENTITY, 1, aim).is_empty(), "Controller-inferred skeleton cannot use stale runtime hand aim")
+	var invalid := make_aim()
+	invalid.set_input("index_pinch", 0.0)
+	check(not Hand.runtime_sample(invalid, Transform3D.IDENTITY, 1, true).has("ray"), "Missing boolean runtime selection fails closed")
+	pointer = Hand.new()
+	pointer.update({"source":"hand", "provider":"meta_aim", "ray":[Vector3.ZERO, Vector3.FORWARD], "pinched":false}, 0.014)
+	pointer.update({"source":"hand", "provider":"meta_aim", "ray":[Vector3.ZERO, Vector3.FORWARD], "pinched":true}, 0.014)
+	event = pointer.update({"source":"hand", "provider":"hand_profile", "ray":[Vector3.ZERO, Vector3.FORWARD], "pinched":true}, 0.014)
+	check(event.cancelled and not event.released and not event.pressed and not pointer.down, "Recognizer transition mid-pinch cancels and waits for opening")
+	var action_map := load("res://openxr_action_map.tres") as OpenXRActionMap
+	for profile in Hand.HAND_PROFILES:
+		var matches := action_map.interaction_profiles.filter(func(p): return p.interaction_profile_path == profile)
+		check(matches.size() == 1, "Runtime hand profile declared once: " + profile)
+		if matches.is_empty(): continue
+		for side in ["left", "right"]:
+			var path: String = "/user/hand/" + side + ("/input/pinch_ext/value" if profile == Hand.HAND_PROFILES[0] else "/input/select/value")
+			check(matches[0].bindings.any(func(b): return b.action.resource_name == "trigger_click" and b.binding_path == path), "Both runtime hand selects mapped: " + path)

@@ -13,7 +13,7 @@ class Host extends RefCounted:
 		return accepted
 	func set_mpv_playing(_id: int, _playing: bool) -> void:
 		pass
-	func revise_mpv_video(_id: int, _stereo: bool, _alpha: bool, _profile: String, _position: int, _depth: bool = false, _top_bottom: bool = false) -> int:
+	func revise_mpv_video(_id: int, _stereo: bool, _alpha: bool, _profile: String, _position: int, _depth: bool = false, _top_bottom: bool = false, _exact: bool = false) -> int:
 		return 0
 
 func check(value: bool, message: String) -> void:

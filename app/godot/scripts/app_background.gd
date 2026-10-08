@@ -134,6 +134,16 @@ func cycle_brightness() -> void:
 	brightness = 0.5 if brightness >= 1.25 else brightness + 0.25
 	_apply()
 
+func set_yaw(value: float) -> void:
+	if not is_finite(value): return
+	yaw = fposmod(value, 360.0)
+	changed.emit()
+
+func set_brightness(value: float) -> void:
+	if not is_finite(value): return
+	brightness = clampf(value, 0.5, 1.25)
+	_apply()
+
 func _exit_tree() -> void:
 	if _thread: _thread.wait_to_finish()
 	if _builtin_requested: ResourceLoader.load_threaded_get(BELFAST)

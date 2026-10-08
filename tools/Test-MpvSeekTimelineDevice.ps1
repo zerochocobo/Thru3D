@@ -24,6 +24,7 @@ function Read-Json([string]$file) {
     try { return $text | ConvertFrom-Json } catch { return $null }
 }
 function Request([string]$label,[string]$operation,[string[]]$extras=@()) {
+    if ($operation -in @('open','seek')) { $extras += @('--es','seek_mode','exact') }
     $key=$label+'_'+[guid]::NewGuid().ToString('N')
     & $adb -s $Serial shell am broadcast -n "$package/org.vrpassthroughplayer.plugin.DebugDiagnosticsReceiver" -a "$package.DEBUG_PLAYER_MPV" --es request $key --es operation $operation @extras | Set-Content "$directory/$label-broadcast.txt"
     $deadline=[DateTime]::UtcNow.AddSeconds(15)
@@ -85,6 +86,12 @@ try {
     Wait-Report $receipt latest-held { param($r) (At-Target $r 2000) -and $r.layout.frame_hold.frozen -and $r.player_menu_progress.elapsed -eq '00:02' } | Out-Null
     Wait-Report $receipt completed { param($r) (At-Target $r 2000) -and -not $r.layout.frame_hold.frozen -and
         $r.layout.playback_control.state -eq 'idle' -and $r.media.presentation_identity.pts_us -eq 2000000 } | Out-Null
+    # The paused hold outlasts the controls' hide timer. Reopen them like a user
+    # before resuming; otherwise the stale inactivity deadline hides them at once.
+    $receipt=Request reset-menu display_menu
+    Wait-Report $receipt reset-menu { param($r) -not $r.player_menu_progress.visible } | Out-Null
+    $receipt=Request reopen-menu player_menu
+    Wait-Report $receipt reopen-menu { param($r) At-Target $r 2000 } | Out-Null
     $receipt=Request resume playing @('--ez','enabled','true')
     Wait-Report $receipt resumed { param($r) $r.player_menu_progress.position_ms -gt 2300 -and
         $r.player_menu_progress.position_ms -eq $r.layout.playback_control.observed_position_ms } | Out-Null

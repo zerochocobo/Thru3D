@@ -132,6 +132,19 @@ class MediaServerClientTest {
                 fun verify(value: Boolean, message: String) { if (!value) failures.add(message) }
                 verify(headers["apikey"] == null, "Stash key sent to $provider")
                 val path = request.split(' ')[1]
+                val authorization = headers["authorization"].orEmpty()
+                verify(authorization.startsWith(if (provider == "jellyfin") "MediaBrowser " else "Emby "), "provider authorization scheme")
+                verify(authorization.contains("DeviceId=\"device\""), "stable device identity")
+                if (path.endsWith("/Users/AuthenticateByName")) {
+                    verify(!authorization.contains("Token="), "token sent on login")
+                } else if (provider == "jellyfin") {
+                    verify(headers["x-emby-token"] == null, "legacy Jellyfin token header")
+                    // Jellyfin 12 disables legacy authentication: metadata alone is not authentication.
+                    if (!authorization.contains("Token=\"private-token\""))
+                        return@Fixture Reply(401, body = byteArrayOf())
+                } else {
+                    verify(headers["x-emby-token"] == "private-token", "missing Emby user token")
+                }
                 val response = when {
                     path.endsWith("/Users/AuthenticateByName") -> {
                         verify(JSONObject(body).getString("Pw") == "password", "login body")
@@ -142,7 +155,6 @@ class MediaServerClientTest {
                     path.contains("PlaybackInfo") -> """{"PlaySessionId":"session1","MediaSources":[{"Id":"source","Protocol":"File","Size":100,"SupportsDirectPlay":true}]}"""
                     path.contains("/Items/ab12-cd34") -> media
                     else -> {
-                        verify(headers["x-emby-token"] == "private-token", "missing user token")
                         if (path.contains("StartIndex")) verify(path.contains("StartIndex=48") && path.contains("SearchTerm=A%26B"), "paging/escaped search")
                         """{"Items":[$media],"TotalRecordCount":100}"""
                     }
@@ -166,6 +178,9 @@ class MediaServerClientTest {
                     assertTrue(stream.url.toString().contains("Static=true"))
                     assertFalse(stream.url.toString().contains("private-token"))
                     assertTrue(client.cover("ab12-cd34").path.startsWith("/proxy/Items/"))
+                    assertTrue(http.bytes(client.cover("ab12-cd34"), 1024 * 1024).isNotEmpty())
+                    val ranged = http.open(stream.url, range = "bytes=0-0")
+                    http.release(ranged)
                 }
                 assertTrue(failures.toString(), failures.isEmpty())
             }
@@ -231,6 +246,39 @@ class MediaServerClientTest {
                     }
                 }
                 println("Live Emby: library count=$count; original stream tested=${items.length() > 0}")
+            } finally {
+                http.bytes(account.endpoint("Sessions/Logout"), 1024, JSONObject())
+            }
+        }
+    }
+    @Test fun liveJellyfinLoginBrowseAndDirectStream() {
+        val url = System.getenv("VRPP_JELLYFIN_TEST_URL").orEmpty()
+        val username = System.getenv("VRPP_JELLYFIN_TEST_USERNAME").orEmpty()
+        val password = System.getenv("VRPP_JELLYFIN_TEST_PASSWORD")
+        assumeTrue("Optional local Jellyfin integration", url.isNotEmpty() && username.isNotEmpty() && password != null)
+        val anonymous = MediaServerAccount(java.util.UUID.randomUUID().toString(), "Jellyfin test",
+            MediaServerAccount.address(url), "", "jellyfin")
+        val account = MediaServerHttp(anonymous).use { EmbyClient(anonymous, it).login(username, password!!) }
+        MediaServerHttp(account).use { http ->
+            try {
+                val client = EmbyClient(account, http)
+                assertTrue(client.probe().isNotBlank())
+                val result = client.browse(JSONObject())
+                val count = result.getInt("total")
+                assertTrue(count >= 0)
+                val items = result.getJSONArray("entries")
+                if (items.length() > 0) {
+                    val id = items.getJSONObject(0).getString("id")
+                    assertEquals(id, client.detail(id).getString("id"))
+                    HttpRangeStreamSource(account) { EmbyClient(account, it).stream(id) }.use { source ->
+                        source.open().use { reader ->
+                            val sample = ByteArray(64)
+                            assertTrue(reader.read(0, sample, sample.size) > 0)
+                            assertTrue(reader.read(source.size / 2, sample, sample.size) > 0)
+                        }
+                    }
+                }
+                println("Live Jellyfin: library count=$count; original stream tested=${items.length() > 0}")
             } finally {
                 http.bytes(account.endpoint("Sessions/Logout"), 1024, JSONObject())
             }

@@ -11,10 +11,14 @@ internal object DepthNative {
     @JvmStatic external fun cachePath(assets: AssetManager, cacheDirectory: String?): String
     /** Builds the OpenCL session (a cold cache compiles for tens of seconds). */
     @JvmStatic external fun create(assets: AssetManager, cacheDirectory: String?): Long
+    /** Independent still-photo model, same shared worker but separate compiled-program cache. */
+    @JvmStatic external fun createPhoto(assets: AssetManager, cacheDirectory: String?): Long
     /** {"width","height","prepare_ms","gpu_ops","cpu_fallback_ops"} */
     @JvmStatic external fun describe(handle: Long): String
     /** rgb float32 CHW [0,1] -> near float32 HxW [0,1] (1 = nearest). reset restarts the shot's depth band. */
     @JvmStatic external fun process(handle: Long, rgb: ByteBuffer, near: ByteBuffer, reset: Boolean, frameStep: Int): String
+    /** No temporal history; padding outside the content rectangle never contributes to near depth. */
+    @JvmStatic external fun processPhoto(handle: Long, rgb: ByteBuffer, near: ByteBuffer, x: Int, y: Int, width: Int, height: Int): String
     @JvmStatic external fun close(handle: Long)
 
     /** Model input: 16:9 multiples of the 14 px patch, fixed in the converted graph (tools/models/prepare_depth_mnn.py). */

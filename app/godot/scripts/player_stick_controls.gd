@@ -5,6 +5,12 @@ var right_latched := false
 ## The right stick is zooming an immersive view: it stays zoom until it returns to center.
 var right_zooming := false
 
+## UI captures own the input until each stick returns to center.
+func suspend() -> void:
+	left_latched = true
+	right_latched = true
+	right_zooming = false
+
 # One command per deflection; return to center before changing direction/action.
 # With [zoom] (immersive views) the right stick's up/down zooms continuously instead of volume.
 func poll(left: Vector2, right: Vector2, zoom: bool = false) -> Array[Dictionary]:

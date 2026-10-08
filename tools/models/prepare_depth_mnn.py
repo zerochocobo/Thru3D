@@ -1,11 +1,14 @@
-"""Build the MNN depth model behind realtime 2D->3D (flat SBS) on Quest.
+"""Build the video or independent still-photo MNN depth model on Quest.
 
 Source: Depth Anything V2 Small (Apache-2.0), the ONNX export from
-onnx-community/depth-anything-v2-small. PTMediaServer's 2D->3D uses DA3
-Base/Large on desktop TensorRT; on the Quest GPU only a ViT-S model fits the
-30 fps frame budget, and DAv2-Small is the same DINOv2 ViT-S + DPT family.
+onnx-community/depth-anything-v2-small. The existing Quest pipeline uses this
+DINOv2 ViT-S + DPT model with measured OpenCL timings below. Those timings do
+not establish whether DA3 Small is suitable; that export needs its own
+backend-specific validation and benchmark.
 
-The graph is frozen to one 16:9 input (multiples of the 14 px patch) so every
+The video graph uses a small 16:9 input; --photo builds a separate 518x518
+graph for orientation-preserving letterboxed photos. Each shape is frozen
+(multiples of the 14 px patch) so every
 shape computation and the position-embedding interpolation fold into
 constants; MNN then has no bicubic resize or dynamic shape ops to place on the
 CPU. Inputs are the render bridge's float32 CHW RGB in [0, 1]; ImageNet
@@ -217,9 +220,12 @@ def main():
     parser.add_argument('--width', type=int, default=WIDTH)
     parser.add_argument('--height', type=int, default=HEIGHT)
     parser.add_argument('--install', action='store_true', help='copy the verified model into the plugin assets')
+    parser.add_argument('--photo', action='store_true', help='build the independent 518x518 still-photo model; never replace the video asset')
     args = parser.parse_args()
     width, height = args.width, args.height
-    if width % 14 or height % 14 or width % 2 or height % 2 or width > 512 or height > 512:
+    if args.photo:
+        width, height = 518, 518
+    elif width <= 0 or height <= 0 or width % 14 or height % 14 or width % 2 or height % 2 or width > 512 or height > 512:
         raise SystemExit('Depth input must be even multiples of 14, at most 512 (render bridge limit)')
     OUT.mkdir(parents=True, exist_ok=True)
     key = f'{width}x{height}'
@@ -247,14 +253,14 @@ def main():
                     input='src float32 1x3xHxW RGB 0..1 (ImageNet normalization folded)',
                     output='depth float32 1x1xHxW relative inverse depth (larger = nearer)',
                     width=width, height=height, frozen_onnx_sha256=sha(frozen_path), mnn_sha256=sha(mnn_path),
-                    mnn_file='depth.mnn', dynamic_ops_left=leftovers,
+                    mnn_file='photo_depth.mnn' if args.photo else 'depth.mnn', usage='photo' if args.photo else 'video', dynamic_ops_left=leftovers,
                     frozen_vs_source_rel_max=frozen_error, mnn_fp16_weights_vs_frozen_rel_max=mnn_error)
     (OUT / f'manifest_{key}.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(manifest, indent=2))
     if args.install:
         ASSETS.mkdir(parents=True, exist_ok=True)
-        (ASSETS / 'depth.mnn').write_bytes(mnn_path.read_bytes())
-        (ASSETS / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+        (ASSETS / manifest['mnn_file']).write_bytes(mnn_path.read_bytes())
+        (ASSETS / ('photo_manifest.json' if args.photo else 'manifest.json')).write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
         (ASSETS / 'LICENSE-DepthAnythingV2-Small.txt').write_bytes(
             (ROOT / 'models/licenses/DepthAnythingV2_Apache-2.0.txt').read_bytes())
         print(f'Installed depth model {manifest["mnn_sha256"][:12]} -> {ASSETS}')

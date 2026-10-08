@@ -216,9 +216,10 @@ internal object DepthWarmup {
                 if (ready(app)) { report(base.put("state", "cached")); return@post }
                 report(JSONObject(base.toString()).put("state", "warming"))
                 val started = System.nanoTime()
-                val handle = DepthNative.create(app.assets, cacheDirectory(app).absolutePath)
-                val described = JSONObject(DepthNative.describe(handle))
-                DepthNative.close(handle)
+                val described = ModelPreparationGate.run {
+                    val handle = DepthNative.create(app.assets, cacheDirectory(app).absolutePath)
+                    try { JSONObject(DepthNative.describe(handle)) } finally { DepthNative.close(handle) }
+                }
                 report(described.put("profile_key", "depth").put("model", "depth").put("state", "ready")
                     .put("compile_ms", (System.nanoTime() - started) / 1_000_000))
             } catch (error: Throwable) {

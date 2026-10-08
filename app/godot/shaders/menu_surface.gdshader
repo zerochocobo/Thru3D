@@ -1,5 +1,6 @@
 shader_type spatial;
-render_mode unshaded, cull_disabled, depth_draw_never, depth_test_disabled, blend_mix;
+// Keep UI layer ordering, but let nearer controllers/hands occlude the surface.
+render_mode unshaded, cull_disabled, depth_draw_never, blend_mix;
 
 uniform vec4 surface_color : source_color = vec4(0.07, 0.08, 0.10, 0.97);
 uniform vec2 surface_size = vec2(1.0);

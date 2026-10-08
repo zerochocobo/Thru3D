@@ -31,11 +31,13 @@ func take_pending() -> Dictionary:
 	in_flight = sequence
 	return {"request_id": sequence, "target_ms": target_ms}
 
-func first_frame() -> bool:
+func first_frame(actual_position_ms: int = -1) -> bool:
 	if pending or in_flight != sequence or in_flight == 0:
 		return false
 	in_flight = 0
-	observed_position_ms = target_ms
+	# Keyframe seeks can land before the requested target. Confirm the displayed
+	# source PTS, while retaining target_ms as the user's request for diagnostics.
+	observed_position_ms = maxi(0, actual_position_ms) if actual_position_ms >= 0 else target_ms
 	return true
 
 func reject() -> void:

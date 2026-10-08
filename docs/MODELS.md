@@ -10,6 +10,7 @@ Normal playback expects:
 external-model-assets/
   rvm-mnn/rvm.mnn       modified/distilled RVM, RGBA uint8-range input
   depth-mnn/depth.mnn   Depth Anything V2 Small, 252×140 input
+  depth-mnn/photo_depth.mnn   Independent still-photo Depth Anything V2 Small, 518×518 input
 ```
 
 Import without trusting the supplied files' own metadata:
@@ -28,7 +29,7 @@ The importer checks every model against the committed catalog before copying, re
 | Model | Source | Project transformations |
 | --- | --- | --- |
 | RVM MobileNetV3 | [RVM v1.0.0](https://github.com/PeterL1n/RobustVideoMatting/releases/tag/v1.0.0); pinned ONNX in `rvm_mobilenetv3.json` | Ratio=1 specialization, unused output pruning, 0..255/RGBA input handling, operator fusion, sliced decoder and recurrent student distillation, MNN conversion. |
-| Depth Anything V2 Small | [ONNX model](https://huggingface.co/onnx-community/depth-anything-v2-small); source SHA256 in the runtime conversion manifest | Fixed 252×140 shape, folded normalization, patch-embedding and attention rewrites, MNN FP16 weights. |
+| Depth Anything V2 Small | [ONNX model](https://huggingface.co/onnx-community/depth-anything-v2-small); source SHA256 in the runtime conversion manifest | Video: 252×140. Photos: independent 518×518 model, aspect-preserving letterbox, content-only normalization. Both fold input normalization, rewrite patch embedding/attention, and use MNN FP16 weights. |
 
 RVM uses four recurrent states independently for each eye. Runtime models are not generic arbitrary ONNX/MNN files; tensor names, dimensions, conventions and the patched MNN kernels are part of the interface contract.
 
@@ -38,7 +39,7 @@ Relevant tools:
 - `specialize_rvm_ratio_one.py`, `fuse_rvm_graph.py`, `slim_rvm_decoder.py`: graph modifications.
 - `distill_rvm_decoder.py`: train/export a student using explicitly supplied, licensed media. `data --sources` takes a JSON array of `{ "file": "path/to/your-video.mp4", "exclude_seconds": [[0, 5]] }`; no original training filenames are built in.
 - `prepare_rvm_mnn.py`: convert the matching student and upstream quality graph using `MNNCONVERT`.
-- `prepare_depth_mnn.py`: convert/check the depth source with two user-provided sample images under `build/depth/sample_a.png` and `sample_b.png`.
+- `prepare_depth_mnn.py`: convert/check the video depth source with two user-provided sample images under `build/depth/sample_a.png` and `sample_b.png`. Run again with `--photo --install` to install the separate photo model; it never replaces the video asset.
 - `tools/mnn/patch_mnn_vrpp.py`: reproduce the MNN OpenCL HardSwish changes required by the matting graph.
 
 For example, graph preparation begins with:

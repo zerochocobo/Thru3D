@@ -1,0 +1,16 @@
+[
+  {"id":"godot","name":"Godot 4.7.2","license":"MIT","assets":[]},
+  {"id":"godot-third-party","name":"Godot third-party components","license":"Bundled license notices","assets":[]},
+  {"id":"project","name":"Thru3D / MPV / FFmpeg","license":"GPL-3.0","assets":["mpv/LICENSE.GPL","mpv/LICENSE.LGPL"]},
+  {"id":"vendors","name":"Godot OpenXR Vendors 5.1.0","license":"Vendor license notices","assets":["player-licenses/vendors.txt"]},
+  {"id":"rvm","name":"RVM MobileNetV3","license":"GPL-3.0","assets":["player-licenses/rvm.txt"]},
+  {"id":"mnn","name":"MNN 3.6.1","license":"Apache-2.0","assets":["player-licenses/mnn.txt"]},
+  {"id":"ncnn","name":"ncnn 20260526","license":"BSD-3-Clause","assets":["player-licenses/ncnn.txt"]},
+  {"id":"depth","name":"Depth Anything V2 Small","license":"Apache-2.0","assets":["player-licenses/depth.txt"]},
+  {"id":"media3","name":"AndroidX Media3","license":"Apache-2.0","assets":["player-licenses/media3.txt"]},
+  {"id":"jcifs","name":"CodeLibs JCIFS 3.0.4","license":"LGPL-2.1","assets":["player-licenses/jcifs.txt"]},
+  {"id":"115","name":"p115rsacipher 0.0.1","license":"MIT","assets":["p115rsacipher/NOTICE.md","p115rsacipher/LICENSE"]},
+  {"id":"hands","name":"Godot OpenXR hand demo assets","license":"MIT","assets":["player-licenses/hands.txt"]},
+  {"id":"panorama","name":"Belfast Sunset (Pure Sky)","license":"CC0-1.0","assets":["player-licenses/panorama-notice.txt","polyhaven/CC0-1.0.txt"]},
+  {"id":"gradle","name":"Gradle wrapper 8.11.1","license":"Apache-2.0","assets":["gradle/NOTICE.txt","gradle/LICENSE.txt"]}
+]

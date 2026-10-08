@@ -979,7 +979,90 @@ float* float_buffer(JNIEnv* env, jobject buffer, size_t bytes, bool writable = t
         throw std::runtime_error("Render bridge float buffer alignment invalid");
     return address;
 }
+
+// Still photos use the very same compute/fragment passes as video, once per strength.
+// An isolated worker context avoids doing inference, readback or PNG encoding on Godot's GL thread.
+struct PhotoEgl final {
+    EGLDisplay display = EGL_NO_DISPLAY, previous_display = eglGetCurrentDisplay();
+    EGLContext context = EGL_NO_CONTEXT, previous_context = eglGetCurrentContext();
+    EGLSurface surface = EGL_NO_SURFACE, previous_draw = eglGetCurrentSurface(EGL_DRAW), previous_read = eglGetCurrentSurface(EGL_READ);
+    EGLenum previous_api = eglQueryAPI();
+    PhotoEgl() {
+        try {
+            display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+            if (display == EGL_NO_DISPLAY || !eglInitialize(display, nullptr, nullptr)) throw std::runtime_error("Photo EGL unavailable");
+            const EGLint config_attributes[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+                EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
+            EGLConfig config{}; EGLint count = 0;
+            if (!eglChooseConfig(display, config_attributes, &config, 1, &count) || count != 1 || !eglBindAPI(EGL_OPENGL_ES_API))
+                throw std::runtime_error("Photo EGL configuration unavailable");
+            const EGLint surface_attributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+            const EGLint context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+            surface = eglCreatePbufferSurface(display, config, surface_attributes);
+            context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
+            if (surface == EGL_NO_SURFACE || context == EGL_NO_CONTEXT || !eglMakeCurrent(display, surface, surface, context))
+                throw std::runtime_error("Photo EGL context unavailable");
+        } catch (...) { dispose(); throw; }
+    }
+    void dispose() {
+        if (context != EGL_NO_CONTEXT && eglGetCurrentContext() == context) eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (context != EGL_NO_CONTEXT) eglDestroyContext(display, context);
+        if (surface != EGL_NO_SURFACE) eglDestroySurface(display, surface);
+        context = EGL_NO_CONTEXT; surface = EGL_NO_SURFACE;
+        eglBindAPI(previous_api);
+        if (previous_display != EGL_NO_DISPLAY) eglMakeCurrent(previous_display, previous_draw, previous_read, previous_context);
+        // This process's EGL display is shared with Godot: never eglTerminate it here.
+    }
+    ~PhotoEgl() { dispose(); }
+};
+
+void photo_stereo(const unsigned char* rgba, int w, int h, const float* near, int mw, int mh,
+                  const std::array<float, 4>& rect, float strength, unsigned char* output) {
+    if (w < 1 || h < 1 || w > 4096 || h > 4096 || static_cast<int64_t>(w) * h > 8LL * 1024 * 1024 ||
+        mw < 1 || mh < 1 || mw > 518 || mh > 518 || !std::isfinite(strength) || strength < 0.f || strength > 2.f)
+        throw std::runtime_error("Photo stereo dimensions/strength invalid");
+    for (float v : rect) if (!std::isfinite(v)) throw std::runtime_error("Photo stereo content invalid");
+    if (rect[0] < 0 || rect[1] < 0 || rect[2] <= 0 || rect[3] <= 0 || rect[0]+rect[2] > 1.000001f || rect[1]+rect[3] > 1.000001f)
+        throw std::runtime_error("Photo stereo content out of bounds");
+    PhotoEgl egl;
+    GLint maximum = 0; glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
+    if (w * 2 > maximum || h > maximum) throw std::runtime_error("Photo stereo exceeds GPU texture limit");
+    Bridge bridge(w, h, mw, mh, 0);
+    // Only the still's own colour, mask and warp are allocated; no video slots/decoder/model inputs.
+    glGenVertexArrays(1, &bridge.vao); glGenFramebuffers(1, &bridge.fbo);
+    bridge.content_rect = rect;
+    auto& slot = bridge.slots[0]; slot.token = 1; slot.phase = Phase::held;
+    image(slot.color, w, h);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    std::vector<float> right(near, near + static_cast<size_t>(mw) * mh);
+    bridge.upload_alpha(1, near, right.data());
+    // Use render_warp directly: the video width cap is a realtime budget, not a still-photo cap.
+    bridge.render_warp(slot, 0.035f * strength, 0.35f);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0); glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w * 2, h, GL_RGBA, GL_UNSIGNED_BYTE, output);
+    check_gl("Photo stereo readback");
+}
 } // namespace
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_vrpassthroughplayer_plugin_RenderBridgeNative_photoStereo(JNIEnv* env, jclass, jobject rgba, jint w, jint h,
+    jobject near, jint mw, jint mh, jfloatArray content, jfloat strength, jobject output) {
+    try {
+        // Validate dimensions before calculating buffer sizes or reading arrays.
+        if (w < 1 || h < 1 || w > 4096 || h > 4096 || static_cast<int64_t>(w)*h > 8LL*1024*1024 ||
+            mw < 1 || mh < 1 || mw > 518 || mh > 518 || !content || env->GetArrayLength(content) != 4)
+            throw std::runtime_error("Photo stereo input invalid");
+        const auto* color = static_cast<unsigned char*>(direct_buffer(env, rgba, static_cast<size_t>(w)*h*4, false));
+        const auto* depth = float_buffer(env, near, static_cast<size_t>(mw)*mh*4, false);
+        auto* result = static_cast<unsigned char*>(direct_buffer(env, output, static_cast<size_t>(w)*h*8, true));
+        std::array<float, 4> rect{}; env->GetFloatArrayRegion(content, 0, 4, rect.data());
+        if (env->ExceptionCheck()) return 0;
+        const auto started = std::chrono::steady_clock::now();
+        photo_stereo(color, w, h, depth, mw, mh, rect, strength, result);
+        return std::max<jlong>(1, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-started).count());
+    } catch (const std::exception& e) { error(env, e.what()); return 0; }
+}
 
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_org_vrpassthroughplayer_plugin_RenderBridgeNative_freezePair(JNIEnv* env, jclass, jlong id, jlong token, jboolean warped) {

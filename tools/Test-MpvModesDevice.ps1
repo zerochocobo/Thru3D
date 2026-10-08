@@ -23,6 +23,7 @@ function Read-Json([string]$name) {
     try { return $raw | ConvertFrom-Json } catch { return $null }
 }
 function Request([string]$label, [string]$operation, [string[]]$extras=@()) {
+    if ($operation -in @('open','seek')) { $extras += @('--es','seek_mode','exact') }
     $key = $label + '_' + [guid]::NewGuid().ToString('N')
     & $adb -s $Serial shell am broadcast -n "$package/org.vrpassthroughplayer.plugin.DebugDiagnosticsReceiver" -a "$package.DEBUG_PLAYER_MPV" --es request $key --es operation $operation @extras | Set-Content "$directory/$label-broadcast.txt"
     if ($LASTEXITCODE -ne 0) { throw "Broadcast failed: $label" }

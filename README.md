@@ -4,7 +4,7 @@
 
 Standalone Android VR/MR media player for Meta Quest and PICO. Thru3D combines a Godot OpenXR interface, Android media access, a native libmpv renderer, and MNN inference for video matting and depth-based stereo rendering.
 
-Current source version: **0.2.1** (Android versionCode **4**). An experimental standard OpenXR Android export is also available.
+Current source version: **0.3.0** (Android versionCode **5**). An experimental standard OpenXR Android export is also available.
 
 ## Features
 
@@ -16,6 +16,8 @@ Current source version: **0.2.1** (Android versionCode **4**). An experimental s
 - Controller ray/trigger selection and hand interaction; English, Chinese and Japanese UI.
 - Persistent timestamp bookmarks, source-frame previews for recent playback, and paged media navigation.
 - Rendered hands/controllers and display-quality controls, including sharpness and flat-screen adjustments.
+- VR-native account forms and in-app web login; speed-first and precise seek policies.
+- Immersive photo presentation, pinch-drag navigation, adjacent-photo preload and cached 3D conversion; photo stereo strength is capped at 100%.
 
 ## Source release
 
@@ -74,7 +76,7 @@ Outputs are written under the ignored `artifacts` directory. A locally built app
 
 ## Controls
 
-Open the VR menu with the left Menu button. Point a controller ray at a control and press that controller's trigger. Thumbsticks scroll lists while a menu is open; playback shortcuts are suppressed. Hand pointing/pinching is also supported. Desktop input is intended for development previews.
+Open the VR menu with the left Menu button. Point a controller ray at a control and press that controller's trigger. Libraries, settings, list popups and photo menus use thumbsticks only for scrolling. The ordinary video control bar allows seek, volume and immersive zoom shortcuts; pointer capture suppresses them, with a return-to-center gate after capture or lists close. Hand pointing/pinching is also supported. Desktop input is intended for development previews.
 
 ## Status and limitations
 

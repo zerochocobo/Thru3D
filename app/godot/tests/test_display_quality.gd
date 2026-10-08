@@ -21,7 +21,8 @@ func _run() -> void:
 	main.recent_menu.section = main.recent_menu.Section.SETTINGS
 	main.recent_menu.tab = main.recent_menu.DISPLAY_TAB
 	main.recent_menu.refresh()
-	check(main.recent_menu.rows.size() == 7, "Three quality and four sharpness options")
+	check(main.recent_menu.rows.size() == 2 and main.recent_menu.rows[0].choices.size() == 3 and main.recent_menu.rows[1].choices.size() == 4,
+		"Quality and sharpness each occupy one field with all their choices")
 	main._on_setting_changed("display_quality",2)
 	main._on_setting_changed("sharpness",0.4)
 	check(main.display.render_scale == 1.1, "Quality keeps current XR targets until restart")

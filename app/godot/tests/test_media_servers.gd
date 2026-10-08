@@ -5,7 +5,7 @@ const Browser := preload("res://scripts/media_server_browser.gd")
 var checks := 0
 var failures: Array[String] = []
 
-class Platform extends Object:
+class Platform extends "res://tests/account_platform_fixture.gd":
 	signal media_list(id: int, json: String)
 	signal android_lifecycle(state: String)
 	var next := 0
@@ -15,7 +15,7 @@ class Platform extends Object:
 	func media_server_request(json: String) -> int:
 		next += 1; requests[next] = JSON.parse_string(json); return next
 	func media_server_cancel(id: int) -> void: cancelled.append(id)
-	func media_server_accounts() -> void: setups += 1
+	func account_list(_kind: String) -> String: return JSON.stringify([{ "id": "emby-new", "name": "Emby NAS", "provider": "emby" }])
 	func accounts_changed() -> void:
 		media_list.emit(0, JSON.stringify({"source": "medialib", "state": "accounts_changed"}))
 	func answer(id: int, data: Dictionary) -> void:
@@ -86,9 +86,9 @@ func _run() -> void:
 	check(not menu.visible and b.pending.is_empty(), "play closes UI and cancels prefetch")
 	check(not preload("res://scripts/file_mode_memory.gd").key_for("medialib://srv/scene/1").is_empty(), "stable history identity accepted")
 	menu.toggle(); b.action(Browser.ACTION + 1)
-	check(platform.setups == 1, "native server setup")
+	check(menu.account_panel.view == "choose" and menu.account_panel.kind == "server", "in-app server setup")
 	platform.android_lifecycle.emit("resume")
-	check(b.view == "servers" and not b.setup, "native setup return refreshes accounts")
+	check(menu.account_panel.view == "choose" and not b.setup, "resume retains in-app setup")
 	menu._activate(Menu.NAV_BASE + Menu.Section.RECENT)
 	check(b.pending.is_empty(), "leaving server cancels requests")
 	check(Menu.NAV_ORDER.find(Menu.Section.MEDIA_SERVER) + 1 == Menu.NAV_ORDER.find(Menu.Section.SETTINGS), "servers immediately above settings")
@@ -131,19 +131,21 @@ func _run() -> void:
 	platform.answer(platform.next, {"servers": []})
 	b.action(Browser.ACTION + 1)
 	var before_save: int = platform.next
-	platform.accounts_changed() # Saved in the native window, without an Android resume.
+	menu.account_panel.close()
+	platform.accounts_changed() # A successful in-app save does not require Android resume.
 	check(platform.next == before_save + 1 and platform.requests[platform.next].action == "servers", "saving without resume reloads servers")
 	var emby := {"id": "emby-new", "name": "Emby NAS", "provider": "emby"}
 	platform.answer(platform.next, {"servers": [emby]})
 	check(menu.rows.size() == 1 and menu.rows[0].server_account.id == "emby-new", "new Emby has a visible entry without reopening the menu")
 	check(menu._buttons.any(func(button): return button.target == Browser.ACTION + 14 and button.enabled), "server edit is visible beside add and delete")
-	var setups_before: int = platform.setups
 	b.action(Browser.ACTION + 14)
-	check(platform.setups == setups_before + 1 and b.setup, "explicit server edit opens account management")
+	check(menu.account_panel.view == "accounts" and not b.setup, "explicit server edit opens in-app account management")
+	menu.account_panel.close(); menu.refresh()
 	menu._choose(menu.rows[0])
 	check(platform.requests[platform.next].action == "browse" and platform.requests[platform.next].server_id == "emby-new", "new Emby entry opens its library")
 	b.action(Browser.ACTION + 1)
-	platform.android_lifecycle.emit("resume") # Some window transitions resume before save.
+	menu.account_panel.close(); b.load_servers(); menu.refresh()
+	platform.android_lifecycle.emit("resume")
 	var before_change: int = platform.next
 	platform.accounts_changed()
 	check(before_change in platform.cancelled, "account change cancels a pre-save list request")

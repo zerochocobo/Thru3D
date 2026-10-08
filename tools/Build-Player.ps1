@@ -13,9 +13,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $ApkName) {
     $ApkName = if ($BuildType -eq 'Release') {
         switch ($XrVendor) {
-            'Pico' { 'Thru3D-PICO4-release.apk' }
+            'Pico' { 'Thru3D-PICO-release.apk' }
             'OpenXR' { 'Thru3D-OpenXR-release.apk' }
-            default { 'Thru3D-Quest3-release.apk' }
+            default { 'Thru3D-QUEST-release.apk' }
         }
     } else {
         switch ($XrVendor) {
@@ -199,6 +199,13 @@ try {
     if (@($apkArchive.Entries | Where-Object { $_.FullName -match '^lib/.*/libgodot_android\.so$' }).Count -ne 1) { throw 'APK must contain exactly one Godot engine library.' }
     if ($apkArchive.GetEntry('lib/arm64-v8a/libgojni.so') -or ($apkArchive.Entries | Where-Object { $_.FullName -match '(^|/)(openlist|cloudcore)(/|\.)' })) { throw 'APK still contains the retired OpenList core.' }
     if (-not $apkArchive.GetEntry('assets/p115rsacipher/LICENSE')) { throw 'APK is missing the MIT 115 cipher license.' }
+    $accountLicenses = Get-Content (Join-Path $workspace 'app/godot/i18n/licenses.json') -Raw | ConvertFrom-Json
+    if (-not $apkArchive.GetEntry('assets/licenses.json')) { throw 'APK is missing the global About license index.' }
+    foreach ($component in $accountLicenses) {
+        foreach ($asset in $component.assets) {
+            if (-not $apkArchive.GetEntry('assets/' + $asset)) { throw "APK is missing global About license text: $asset" }
+        }
+    }
     foreach ($notice in @('assets/backgrounds/CC0-1.0.txt', 'assets/backgrounds/NOTICE.txt')) {
         if (-not $apkArchive.GetEntry($notice)) { throw "APK is missing panorama attribution/license: $notice" }
     }
@@ -295,7 +302,9 @@ try {
     }
     $mnnManifest = Get-Content (Join-Path $projectDirectory '..\..\android\player-plugin\src\main\assets\rvm-mnn\manifest.json') -Raw | ConvertFrom-Json
     $depthManifest = Get-Content (Join-Path $projectDirectory '..\..\android\player-plugin\src\main\assets\depth-mnn\manifest.json') -Raw | ConvertFrom-Json
-    $requiredModels = @(@('rvm-mnn/rvm.mnn', $mnnManifest.mnn_sha256), @('depth-mnn/depth.mnn', $depthManifest.mnn_sha256))
+    $photoDepthManifest = Get-Content (Join-Path $workspace 'android\player-plugin\src\main\assets\depth-mnn\photo_manifest.json') -Raw | ConvertFrom-Json
+    if ($photoDepthManifest.width -ne 518 -or $photoDepthManifest.height -ne 518 -or $photoDepthManifest.usage -ne 'photo') { throw 'Photo depth model profile differs.' }
+    $requiredModels = @(@('rvm-mnn/rvm.mnn', $mnnManifest.mnn_sha256), @('depth-mnn/depth.mnn', $depthManifest.mnn_sha256), @('depth-mnn/photo_depth.mnn', $photoDepthManifest.mnn_sha256))
     if ($IncludeDiagnostics) { $requiredModels += ,@('rvm-mnn/rvm_quality.mnn', $mnnManifest.quality_mnn_sha256) }
     foreach ($model in $requiredModels) {
         $entry = $apkArchive.GetEntry('assets/' + $model[0])
@@ -325,8 +334,9 @@ $symbols = Get-Content (Join-Path $logDirectory 'rvm-symbols.log') -Raw
 foreach ($symbol in @('Java_org_vrpassthroughplayer_plugin_RvmNative_runBenchmark','Java_org_vrpassthroughplayer_plugin_RvmNative_setGeneration',
     'Java_org_vrpassthroughplayer_plugin_RvmNative_runtimeCapabilities','Java_org_vrpassthroughplayer_plugin_RvmNative_prepareRuntime',
     'Java_org_vrpassthroughplayer_plugin_RvmNative_processRuntime','Java_org_vrpassthroughplayer_plugin_RvmNative_resetRuntime',
-    'Java_org_vrpassthroughplayer_plugin_RvmNative_closeRuntime')) {
-    if (-not $symbols.Contains($symbol)) { throw "Missing RVM JNI symbol: $symbol" }
+    'Java_org_vrpassthroughplayer_plugin_RvmNative_closeRuntime',
+    'Java_org_vrpassthroughplayer_plugin_DepthNative_createPhoto','Java_org_vrpassthroughplayer_plugin_DepthNative_processPhoto')) {
+    if (-not $symbols.Contains($symbol)) { throw "Missing native JNI symbol: $symbol" }
 }
 & "$env:ANDROID_HOME\cmdline-tools\latest\bin\apkanalyzer.bat" dex packages --defined-only $apkPath 2>&1 | Out-File (Join-Path $logDirectory 'apk-dex-packages.log') -Encoding utf8
 if ($LASTEXITCODE -ne 0) { throw 'APK DEX inspection failed.' }
@@ -374,7 +384,7 @@ $buildManifest = [ordered]@{
     built_utc = [DateTime]::UtcNow.ToString('o')
     application_id = $applicationId
     xr_vendor = $XrVendor
-    hand_tracking = 'OpenXR joints; pinch ray input; physical validation pending'
+    hand_tracking = 'OpenXR runtime aim/select preferred; joint pinch fallback; physical validation pending'
     app_version = $appVersion
     android_min_sdk = $androidSdk.minSdkVersion
     android_target_sdk = $androidSdk.targetSdkVersion

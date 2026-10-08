@@ -29,6 +29,8 @@ function Read-Json([string]$file) {
     try { return $text | ConvertFrom-Json } catch { return $null }
 }
 function Request([string]$label, [string]$operation, [string[]]$extras=@()) {
+    # These probes assert exact source PTS rather than the production speed default.
+    if ($operation -in @('open','seek')) { $extras += @('--es','seek_mode','exact') }
     $key=$label+'_'+[guid]::NewGuid().ToString('N')
     $args=@('-s',$Serial,'shell','am','broadcast','-n',"$package/org.vrpassthroughplayer.plugin.DebugDiagnosticsReceiver",'-a',"$package.DEBUG_PLAYER_MPV",'--es','request',$key,'--es','operation',$operation)
     & $adb @args @extras | Set-Content "$directory/$label-broadcast.txt"

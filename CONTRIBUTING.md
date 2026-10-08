@@ -6,4 +6,6 @@ Run the source boundary and applicable host tests described in [TESTING.md](docs
 
 Do not commit model weights, generated APKs/libraries, signing material, credentials, personal media or device logs containing user data. Provide synthetic reproduction fixtures or generation instructions. Do not send account tokens in public issues.
 
-VR menus use controller ray/trigger selection or hand interaction. Thumbsticks scroll open menus and must not trigger playback shortcuts. Keep visible UI text concise and place implementation notes in technical documentation.
+VR menus use controller ray/trigger selection or hand interaction, never thumbstick selection. Libraries, settings, list popups and photo menus reserve thumbsticks for scrolling and suppress playback shortcuts. The ordinary video control bar allows the same seek, volume and immersive zoom shortcuts as hidden controls. Pointer capture suppresses shortcuts; after leaving a list or ending capture, the stick must return to center before reactivation. Keep visible UI text concise and place implementation notes in technical documentation.
+
+Distribution APK filenames use platform names `QUEST`, `PICO` and `OpenXR`, with the requested software version and build date. Do not use specific headset models in distribution filenames.

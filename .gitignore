@@ -40,8 +40,3 @@ local.properties
 /android/player-plugin/src/main/jniLibs/
 /android/player-plugin/src/debug/jniLibs/
 /models/source/
-# Generated UID for a standalone development render script, not referenced by scenes.
-/app/godot/tests/render_screen_curve.gd.uid
-/app/godot/tests/render_input_visuals.gd.uid
-/app/godot/tests/test_flat_screen_controls.gd.uid
-/app/godot/tests/test_input_visuals.gd.uid

@@ -14,7 +14,7 @@ class Host extends RefCounted:
 	var request_id := 100
 	var next_session := 7
 	func mpv_supported() -> bool: return true
-	func open_mpv_video(uri: String, start: int, _stereo: bool, _profile: String, _alpha: bool, _vulkan: bool, _depth: bool = false, _top_bottom: bool = false) -> int:
+	func open_mpv_video(uri: String, start: int, _stereo: bool, _profile: String, _alpha: bool, _vulkan: bool, _depth: bool = false, _top_bottom: bool = false, _exact: bool = false) -> int:
 		calls.append(["open", uri, start])
 		return next_session
 	func close_mpv_video(id: int) -> void: calls.append(["close", id])

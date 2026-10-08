@@ -21,13 +21,11 @@ class PagedCatalog extends RefCounted:
 		return result
 
 ## Answers like the Android plugin: an id now, media_list(id, json) later.
-class FakePlatform extends Object:
+class FakePlatform extends "res://tests/account_platform_fixture.gd":
 	signal media_list(id: int, payload: String)
 	signal android_lifecycle(state: String)
 	var cloud_setups := 0
 	var cloud_refreshed := false
-	func media_cloud_accounts() -> void:
-		cloud_setups += 1
 	func media_cloud_browse(path: String, refresh_cloud: bool) -> int:
 		cloud_refreshed = refresh_cloud
 		var entries := [{"id": "/mount1", "title": "115", "container": true}] if path.is_empty() else \
@@ -94,6 +92,19 @@ func settle() -> void:
 
 func titles(menu: Node) -> Array:
 	return menu.rows.map(func(r): return str(r.title))
+
+func choose_setting(menu: Node, key: String, value: Variant) -> void:
+	for target in menu.choices.targets:
+		var item: Dictionary = menu.choices.targets[target]
+		if item.get("kind") == "open" and item.get("key") == key:
+			menu.choices.action(target); break
+	for page in range(menu.choices.popup.get("choices", []).size() + 1):
+		for target in menu.choices.targets:
+			var item: Dictionary = menu.choices.targets[target]
+			if item.get("kind") == "choose" and item.get("key") == key and menu.choices.same(item.value, value):
+				menu.choices.action(target); return
+		if menu.choices.opened.is_empty(): return
+		menu.stick_scroll(-1.0, 0.3)
 
 func _run() -> void:
 	preload("res://scripts/i18n.gd").use("en") # text checks are written in English
@@ -180,10 +191,13 @@ func _run() -> void:
 	await settle()
 	check(titles(menu) == ["115"], "Cloud breadcrumb returns to account list")
 	menu._activate(Menu.CLOUD_ACCOUNTS)
-	check(platform.cloud_setups == 1, "Account action opens the native login page")
+	check(menu.account_panel.view == "choose" and menu.account_panel.kind == "cloud", "Account action opens in-app provider selection")
 	platform.android_lifecycle.emit("resume")
 	await settle()
-	check(not menu._cloud_setup and titles(menu) == ["115"], "Returning from login reloads mounts")
+	check(menu.account_panel.view == "choose", "Resume retains in-app provider selection")
+	menu.account_panel.action(menu.AccountPanel.BASE)
+	await settle()
+	check(not menu._cloud_setup and titles(menu) == ["115"], "Leaving account management returns to mounts")
 	menu._activate(Menu.NAV_BASE + Menu.Section.SMB)
 	await settle()
 	check(titles(menu) == ["NAS"], "Saved SMB server listed")
@@ -243,16 +257,23 @@ func _run() -> void:
 	check(not Menu.SETTING_TABS.has("Alpha") and not menu.text_snapshot().contains("320x320")
 		and not menu.text_snapshot().contains("RVM quality"), "Settings omit model and input-resolution decisions")
 	menu._activate(Menu.TAB_BASE + Menu.VIDEO_TAB)
-	menu._activate(Menu.ROW_BASE + 2)
+	choose_setting(menu, "output_width", 4096)
 	check(settings_events.back() == ["output_width", 4096], "Output cap setting")
 	menu._activate(Menu.TAB_BASE + Menu.GENERAL_TAB)
-	check(titles(menu).back() == "Save play history" and menu.rows.back().selected, "History is saved by default")
-	menu._activate(Menu.ROW_BASE + menu.rows.size() - 1)
+	check(menu.rows[1].title == "Save play history" and menu.rows[1].value == true, "History is saved by default")
+	choose_setting(menu, "history", false)
 	check(settings_events.back() == ["history", false], "History can be switched off")
 	menu._activate(Menu.TAB_BASE + Menu.SUBTITLES_TAB)
-	check(titles(menu).size() == Menu.SUBTITLE_DISTANCES.size() and menu.rows[0].selected, "Subtitle distances, 5 m by default")
-	menu._activate(Menu.ROW_BASE + 3)
+	check(menu.rows.size() == 2 and menu.rows[0].choices.size() == Menu.SUBTITLE_DISTANCES.size() and menu.rows[0].value == 5.0,
+		"Subtitle distances form one dropdown, 5 m by default")
+	check(menu.rows[1].key == "subtitle_position" and menu.rows[1].choices.size() == 5 and menu.rows[1].value == 3,
+		"Global VR subtitle settings offer all five positions, lower by default")
+	choose_setting(menu, "subtitle_position", 0)
+	check(settings_events.back() == ["subtitle_position", 0], "Global position selection emits the shared setting")
+	choose_setting(menu, "subtitle_distance", 15.0)
 	check(settings_events.back() == ["subtitle_distance", 15.0], "Choosing a subtitle distance emits a setting")
+	choose_setting(menu, "subtitle_distance", 1.0)
+	check(settings_events.back() == ["subtitle_distance", 1.0], "Global settings retain near subtitle distances")
 	menu._activate(Menu.TAB_BASE + Menu.ABOUT_TAB)
 	var about_text := "\n".join(menu.find_children("*", "Label3D", true, false).map(func(label): return label.text))
 	check(about_text.contains("Thru3D Media Player") and about_text.contains("FFSky Studio")
@@ -363,12 +384,12 @@ func _run() -> void:
 	check(menu.text_snapshot().contains("本地文件") and menu.text_snapshot().contains("需要媒体访问权限") 		and not menu.text_snapshot().contains("Local files"), "Chinese menu and status")
 	menu._activate(Menu.NAV_BASE + Menu.Section.SETTINGS)
 	menu._activate(Menu.TAB_BASE + Menu.GENERAL_TAB)
-	check(menu.rows.size() == 7 and menu.rows[1].title == "语言 · 简体中文" and menu.rows[2].title == "语言 · 繁體中文"
-		and menu.rows[3].title == "语言 · 日本語" and menu.rows[4].title == "语言 · English"
-		and menu.rows[0].title == "语言 · 跟随系统", "General lists all languages, each named in itself")
+	check(menu.rows.size() == 3 and menu.rows[0].title == "语言" and menu.rows[0].value == "zh"
+		and menu.rows[0].choices.map(func(option): return option.label) == ["System", "简体中文", "繁體中文", "日本語", "English"],
+		"General groups all languages in one dropdown, each named in itself")
 	var chosen := []
 	menu.setting_changed.connect(func(key, value): chosen.append([key, value]))
-	menu._activate(Menu.ROW_BASE + 4)
+	choose_setting(menu, "language", "en")
 	check(chosen == [["language", "en"]], "Choosing a language reports it")
 	I18n.use("en")
 	menu.refresh()

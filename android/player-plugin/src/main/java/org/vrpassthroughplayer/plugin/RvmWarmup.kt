@@ -45,7 +45,8 @@ internal object RvmWarmup {
                 report(base.put("state", "cached")); return
             }
             report(JSONObject(base.toString()).put("state", "warming"))
-            report(JSONObject(RvmNative.warmupGpu(app.assets, profile, model)).put("model", model).put("state", "ready"))
+            val result = ModelPreparationGate.run { RvmNative.warmupGpu(app.assets, profile, model) }
+            report(JSONObject(result).put("model", model).put("state", "ready"))
         } catch (error: Throwable) {
             report(base.put("state", "failed").put("message", error.message))
         }

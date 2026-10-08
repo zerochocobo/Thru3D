@@ -6,12 +6,16 @@ const UNDO := 2002
 const CLOSE := 2003
 const UP := 2004
 const DOWN := 2005
+const MODE_GLOBAL := 2006
+const MODE_SPEED := 2007
+const MODE_EXACT := 2008
 const ROW := 2100
 const DELETE := 2200
 const GROUP := 2300
 const ROWS := 5
 const LANE_Y := -0.142
 const Timeline := preload("res://scripts/timeline_markers.gd")
+const SeekPolicy := preload("res://scripts/seek_policy.gd")
 var menu: Node3D
 var opened := false
 var offset := 0
@@ -48,11 +52,15 @@ func draw() -> void:
 		reset(); notice = ""; scope = _scope()
 	targets.clear()
 	var has_video: bool = menu._state.get("has_video", false)
-	menu._round(ADD, "bookmark_add", Vector2(0.28, 0.215), 0.08,
-		menu._state.get("bookmark_ready", false) and menu._seek_hand.is_empty(), false, menu.I18n.t("Add bookmark"))
-	menu._round(LIST, "bookmark", Vector2(-0.28, 0.215), 0.08, has_video, false, menu.I18n.t("Bookmarks"))
+	menu._glyph(ADD, "bookmark_add", Vector2(-0.22, 0.025), 0.06,
+		menu._state.get("bookmark_ready", false) and menu._seek_hand.is_empty(), menu.I18n.t("Add bookmark"))
 	var all: Array = menu._state.get("bookmarks", [])
-	if not all.is_empty(): menu._label(str(all.size()), Vector3(-0.235, 0.245, 0.004), 13)
+	if not all.is_empty():
+		menu._round(LIST, "bookmark", Vector2(-0.28, 0.215), 0.08, has_video, false, menu.I18n.t("Bookmarks"))
+		menu._label(str(all.size()), Vector3(-0.235, 0.245, 0.004), 13)
+	elif opened:
+		# The final delete closes the now-empty list. Undo remains available separately.
+		opened = false; subset.clear(); capture.clear()
 	if menu._state.get("bookmark_undo", false):
 		menu._round(UNDO, "undo", Vector2(0.42, 0.215), 0.08, true, false, menu.I18n.t("Undo delete"))
 	if Time.get_ticks_msec() < notice_until:
@@ -70,10 +78,20 @@ func draw() -> void:
 	if not opened: return
 	var entries := _markers()
 	offset = clampi(offset, 0, maxi(0, entries.size() - ROWS))
-	var panel = menu._quad(Vector2(0.84, 0.46), Vector3(0, 0.5, 0.001), menu.PANEL, 10)
+	var panel = menu._quad(Vector2(0.84, 0.56), Vector3(0, 0.55, 0.001), menu.PANEL, 10)
 	menu.add_child(panel); menu._decorations.append(panel)
-	menu._label(menu.I18n.t("Bookmarks") + " · " + str(entries.size()), Vector3(-0.05, 0.686, 0.01), 21)
-	menu._glyph(CLOSE, "close", Vector2(0.355, 0.686), 0.065, true, menu.I18n.t("Close"))
+	menu._label(menu.I18n.t("Bookmarks") + " · " + str(entries.size()), Vector3(-0.05, 0.778, 0.01), 21)
+	menu._glyph(CLOSE, "close", Vector2(0.355, 0.778), 0.065, true, menu.I18n.t("Close"))
+	menu._label(menu.I18n.t("Video time positioning"), Vector3(0, 0.718, 0.01), 14).modulate = menu.MUTED
+	var choice := SeekPolicy.bookmark_override(menu._state.get("bookmark_seek_mode", SeekPolicy.GLOBAL))
+	for option in [[MODE_GLOBAL, SeekPolicy.GLOBAL, "Follow global", -0.225, 0.27],
+		[MODE_SPEED, SeekPolicy.SPEED, "Speed", 0.035, 0.2], [MODE_EXACT, SeekPolicy.EXACT, "Precise", 0.26, 0.2]]:
+		var target: int = option[0]
+		menu._button(target, menu.I18n.t(option[2]), Vector2(option[3], 0.669), Vector2(option[4], 0.054))
+		menu._buttons.back().base_color = menu.SELECTED if choice == option[1] else menu.TILE
+		targets[target] = {"kind": "seek_mode", "mode": option[1]}
+		menu._tips[target] = menu.I18n.t("Follow global setting") + " · " + menu.I18n.t(SeekPolicy.caption(menu._state.get("seek_mode", SeekPolicy.SPEED))) \
+			if option[1] == SeekPolicy.GLOBAL else menu.I18n.t("Faster jumps, less precise" if option[1] == SeekPolicy.SPEED else "Accurate jumps, may take longer")
 	if entries.is_empty(): menu._label(menu.I18n.t("No bookmarks"), Vector3(0, 0.49, 0.01), 20)
 	for row in mini(ROWS, entries.size() - offset):
 		var item: Dictionary = entries[offset + row]
@@ -134,6 +152,9 @@ func _activate(target: int, item: Dictionary, media_scope: String) -> void:
 		opened = false; menu.refresh()
 	elif target in [UP, DOWN]:
 		offset += -ROWS if target == UP else ROWS; menu.refresh()
+	elif item.get("kind") == "seek_mode":
+		menu.bookmark_mode_requested.emit(str(item.mode), media_scope)
+		menu.refresh()
 	elif item.get("kind") == "delete":
 		menu.bookmark_requested.emit("delete", str(item.id), media_scope)
 	elif item.get("kind") == "seek":
@@ -144,6 +165,7 @@ func _activate(target: int, item: Dictionary, media_scope: String) -> void:
 			opened = true; subset = item.ids.duplicate(); offset = 0; _close_other_popups(); menu.refresh()
 
 func _close_other_popups() -> void:
+	menu.choices.reset()
 	menu._subtitle_open = false; menu._mode_open = false; menu._volume_open = false
 	menu._close_depth_slider()
 
@@ -156,4 +178,6 @@ func stick_scroll(y: float, delta: float) -> void:
 func key() -> Array:
 	return [menu._state.get("bookmark_scope", ""), menu._state.get("bookmark_revision", 0),
 		menu._state.get("bookmark_undo", false), menu._state.get("bookmark_ready", false),
-		menu._state.get("bookmark_seekable", false), menu._state.get("duration_ms", 0), Time.get_ticks_msec() < notice_until]
+		menu._state.get("bookmark_seekable", false), menu._state.get("duration_ms", 0),
+		menu._state.get("seek_mode", SeekPolicy.SPEED), menu._state.get("bookmark_seek_mode", SeekPolicy.GLOBAL),
+		Time.get_ticks_msec() < notice_until]

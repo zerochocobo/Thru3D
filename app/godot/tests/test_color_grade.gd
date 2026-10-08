@@ -42,14 +42,16 @@ func _run() -> void:
 	check(material.get_shader_parameter("grade_enabled") and material.get_shader_parameter("grade_gain").is_equal_approx(Vector3.ONE * 2), "OES switch preserves grading")
 	var video := Video.new()
 	video.subtitle_distance = 1
-	check(video.subtitle_distance == 5, "Legacy subtitle depth clamps to 5m")
+	check(video.subtitle_distance == 1, "Near subtitle distance is retained for close stereo video")
+	video.subtitle_distance = 0.1
+	check(video.subtitle_distance == 0.5, "Subtitle minimum")
 	video.subtitle_distance = INF
 	check(video.subtitle_distance == 5, "Invalid subtitle depth defaults to 5m")
 	video.subtitle_distance = 100
 	check(video.subtitle_distance == 20, "Subtitle maximum")
 	video.free()
 	var menu := Menu.new()
-	menu.state_provider = func(): return {"subtitle_distance": distance, "color_grade": grade.snapshot(), "grade_values": grade.values()}
+	menu.state_provider = func(): return {"has_video": true, "geometry": 1, "subtitle_distance": distance, "color_grade": grade.snapshot(), "grade_values": grade.values()}
 	menu.adjustment_requested.connect(func(key: String, value: Variant):
 		if key == "subtitle_distance": distance = value
 		elif key == "grade_preset": grade.select(value)
@@ -67,6 +69,11 @@ func _run() -> void:
 	check(distance == 20, "Other hand cannot move active slider")
 	menu.release_pointer("right", Vector3.ZERO, Vector3.ZERO, true)
 	check(commits == 1 and menu._adjust_hand.is_empty(), "Release saves and ends drag")
+	menu._activate(421)
+	check(distance == 1.0, "Near preset reaches the playback setting")
+	menu.press_pointer("right", menu.to_global(Vector3(0.33, 0.17, 1)), -menu.global_basis.z, true)
+	check(absf(distance - 1.0) < 0.06, "Slider midpoint offers useful near stereo disparity")
+	menu.release_pointer("right", Vector3.ZERO, Vector3.ZERO, true)
 	menu._activate(400)
 	menu._activate(100 + Menu.OPERATIONS[1].find("color_grade"))
 	menu._activate(411)
@@ -74,7 +81,7 @@ func _run() -> void:
 	menu.press_pointer("right", menu.to_global(Vector3(0.33, -0.05, 1)), -menu.global_basis.z, true)
 	check(grade.preset == "Custom", "Dragging exposure selects custom")
 	menu.dismiss()
-	check(commits == 3 and menu._adjust_hand.is_empty(), "Dismiss saves active drag")
+	check(commits == 5 and menu._adjust_hand.is_empty(), "Dismiss saves active drag")
 	menu.free()
 	for failure in failures: push_error(failure)
 	print("Color grading and distance controls: ", "passed" if failures.is_empty() else failures)

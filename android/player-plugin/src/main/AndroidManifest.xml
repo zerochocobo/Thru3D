@@ -17,18 +17,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- DLNA media servers describe themselves and answer Browse over plain LAN HTTP; Android
          blocks cleartext HttpURLConnection traffic unless the app allows it. -->
-    <queries>
-        <intent><action android:name="pvr.intent.action.VRSHELL" /></intent>
-    </queries>
     <application android:usesCleartextTraffic="true">
-        <!-- Exported for PICO system shell; NativePanelActivity requires an in-process launch permit. -->
-        <activity android:name=".MediaServersActivity" android:exported="true"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar"
-            android:excludeFromRecents="true" />
-        <activity android:name=".CloudAccountsActivity" android:exported="true"
-            android:screenOrientation="landscape"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar"
-            android:excludeFromRecents="true" />
         <meta-data android:name="org.godotengine.plugin.v2.QuestPlayer"
             android:value="org.vrpassthroughplayer.plugin.QuestPlayerPlugin" />
         <!-- MNN dlopens the vendor OpenCL driver for RVM; the app linker namespace

@@ -20,7 +20,7 @@ class BridgeProbe extends RefCounted:
 	func freeze_mpv_pair(id: int, token: int, request: int) -> bool:
 		captures.append([id, token, request])
 		return true
-	func revise_mpv_video(id: int, _stereo: bool, _alpha: bool, _profile: String, target: int, _depth: bool, _tb: bool) -> int:
+	func revise_mpv_video(id: int, _stereo: bool, _alpha: bool, _profile: String, target: int, _depth: bool, _tb: bool, _exact: bool = false) -> int:
 		revisions.append([id, target])
 		return -1 if busy else id + 1
 	func detach_mpv_pair(id: int, token: int) -> bool:

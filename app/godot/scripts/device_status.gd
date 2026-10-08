@@ -5,6 +5,7 @@ extends Node3D
 const Menu := preload("res://scripts/ray_menu.gd")
 const Icons := preload("res://scripts/menu_icons.gd")
 const I18n := preload("res://scripts/i18n.gd")
+const Methods := preload("res://scripts/platform_methods.gd")
 const HEIGHT := 0.046
 const ICON := 0.036
 const FONT_SIZE := 16
@@ -28,7 +29,7 @@ var _label: Label3D
 func _ready() -> void:
 	if not status_provider.is_valid() and Engine.has_singleton("QuestPlayer"):
 		var plugin := Engine.get_singleton("QuestPlayer")
-		if plugin.has_method("device_status"):
+		if Methods.supports(plugin, "device_status"):
 			status_provider = func() -> Dictionary:
 				var parsed: Variant = JSON.parse_string(str(plugin.device_status()))
 				return parsed if parsed is Dictionary else {}
@@ -43,7 +44,7 @@ func _ready() -> void:
 	_label.font = Menu.ui_font()
 	_label.font_size = FONT_SIZE
 	_label.pixel_size = 0.0012
-	_label.no_depth_test = true
+	_label.no_depth_test = false
 	_label.render_priority = 12
 	_label.outline_size = 0
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -116,7 +117,7 @@ func _icon(key: String, color: Color) -> MeshInstance3D:
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.no_depth_test = true
+	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	material.render_priority = 12
 	material.albedo_color = color
 	material.albedo_texture = Icons.texture(key)

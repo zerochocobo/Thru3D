@@ -60,7 +60,10 @@ internal class MpvVideoBridge(
     private var audioFocus: MpvAudioFocus? = null // worker only
     @Volatile private var audioFocusState = "none"
 
-    private inner class Host(val uri: String, val startMs: Int, val hardware: Boolean, val audio: Boolean) {
+    private inner class Host(val uri: String, val startMs: Int, val hardware: Boolean, val audio: Boolean, val exactStart: Boolean) {
+        private val openNs = System.nanoTime()
+        val startup = ConcurrentHashMap<String, Double>()
+        fun markStartup(stage: String) { startup.putIfAbsent(stage, (System.nanoTime() - openNs) / 1_000_000.0) }
         @Volatile var handle = 0L
         @Volatile var owner: EGLContext? = null
         @Volatile var closing = false
@@ -154,11 +157,11 @@ internal class MpvVideoBridge(
     }
     @Synchronized fun open(uri: String, startMs: Int, stereo: Boolean, profile: String,
                            alpha: Boolean, vulkan: Boolean, hardware: Boolean = true, audio: Boolean = true,
-                           depth: Boolean = false, topBottom: Boolean = false): Int {
+                           depth: Boolean = false, topBottom: Boolean = false, exactSeek: Boolean = false): Int {
         if (!supported() || sessions.size >= 2 || startMs < 0 || profile !in RvmProfiles.keys || (depth && (alpha || stereo)) ||
             Uri.parse(uri).scheme !in setOf("content", "file", "smb", "cloud", "medialib", "http", "https")) return -1
         val id = gate.begin(); if (id <= 0) return -1
-        val host = Host(uri, startMs, hardware, audio)
+        val host = Host(uri, startMs, hardware, audio, exactSeek)
         val session = Session(gate.current(id) ?: return -1, host, stereo, profile, alpha, vulkan, debugNormalFastPath, depth,
             stereo && topBottom)
         sessions[id] = session; hosts.add(host)
@@ -166,6 +169,7 @@ internal class MpvVideoBridge(
         prepareModel(session)
         worker.post {
             try {
+                host.markStartup("worker_started_ms")
                 if (host.closing || stopped) return@post
                 val app = context() ?: error("Activity unavailable")
                 val source = Uri.parse(uri)
@@ -177,20 +181,25 @@ internal class MpvVideoBridge(
                     host.descriptor = fd
                     "fd://${fd.fd}"
                 }
+                host.markStartup("source_resolved_ms")
                 // Extra audio is optional: a failed lookup plays the video without it.
                 val extra = if (audio) sidecarAudio(uri) else emptyList()
+                host.markStartup("audio_sidecars_resolved_ms")
                 host.sidecars = extra.mapNotNull { it.descriptor }
                 val captions = sidecarSubtitles(uri)
+                host.markStartup("subtitle_sidecars_resolved_ms")
                 host.subtitleLeases = captions.map { it.location }
                 if (host.closing || stopped) { host.closeDescriptors(); return@post }
                 render(Runnable {
                     if (host.closing || stopped) return@Runnable
                     try {
                         host.owner = EGL14.eglGetCurrentContext()
+                        host.markStartup("native_create_started_ms")
                         host.handle = MpvSourceNative.create(app, path, startMs, hardware, audio, outputWidthCap,
                             extra.flatMap { listOf(it.location, it.title) }.toTypedArray(),
-                            captions.flatMap { listOf(it.location, it.title) }.toTypedArray())
+                            captions.flatMap { listOf(it.location, it.title) }.toTypedArray(), host.exactStart)
                         check(host.handle > 0)
+                        host.markStartup("native_created_ms")
                         MpvSourceNative.setFrameCap(host.handle, frameCap(session))
                         MpvSourceNative.setDirect(host.handle, direct(session))
                         // Native creation stays paused until focus policy has
@@ -233,11 +242,11 @@ internal class MpvVideoBridge(
     }
     /** Returns a new processing generation without reopening the MPV media/audio core. */
     @Synchronized fun revise(id: Int, stereo: Boolean, alpha: Boolean, profile: String, positionMs: Int = -1,
-                             depth: Boolean = false, topBottom: Boolean = false): Int {
+                             depth: Boolean = false, topBottom: Boolean = false, exactSeek: Boolean = false): Int {
         val old = sessions[id] ?: return -1
         if (!active(old) || sessions.size >= 2 || profile !in RvmProfiles.keys || (depth && (alpha || stereo))) return -1
         val host = old.host
-        if (positionMs >= 0 && (host.handle <= 0 || !MpvSourceNative.seek(host.handle, positionMs.toLong()))) return -1
+        if (positionMs >= 0 && (host.handle <= 0 || !MpvSourceNative.seek(host.handle, positionMs.toLong(), exactSeek))) return -1
         val next = gate.replace(id); if (next <= 0) return -1
         val session = Session(gate.current(next) ?: return -1, host, stereo, profile, alpha, old.vulkan, old.normalFastPath, depth,
             stereo && topBottom)
@@ -368,6 +377,7 @@ internal class MpvVideoBridge(
                     val terminal = if (status.optBoolean("eof_source_resolved")) status.optJSONObject("eof_source_ticket") else null
                     session.end.observe(terminal?.let { MpvEndGate.Source(it.getLong("source_epoch"), it.getLong("frame_id"), it.getLong("pts_us")) })
                     event("mpv_state", session, status.put("alpha_requested", session.alpha).put("depth_requested", session.depth)
+                        .put("startup_bridge", JSONObject(session.host.startup as Map<*, *>))
                         .put("captured_frames", session.captured)
                         .put("display_claims", session.display.heldClaims()).put("post_draw_frames", session.ownerDraws)
                         .put("unique_post_draw_frames", session.uniquePostDrawFrames).put("rvm_model_created", session.model != null)
@@ -633,6 +643,7 @@ internal class MpvVideoBridge(
             val pair = session.pairs[token] ?: return false
             if (!active(session) || (session.inference && !session.presented(pair)) || !session.display.acknowledge(token)) return false
             session.drawnToken = token; pair.put("pair_presented", true); session.firstPair = true
+            session.host.markStartup("first_pair_bound_ms")
             return true
         }
     }

@@ -82,7 +82,7 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                         when (intent.action) {
                         "com.wapok.thru3d.DEBUG_PLAYER_MPV" -> {
                             val operation = intent.getStringExtra("operation") ?: "open"
-                            require(operation in setOf("open", "alpha", "depth", "playing", "seek", "hold_pixels", "observe", "stereo", "profile", "close", "pixels", "subtitle", "display_quality", "sharpness", "cloud_accounts", "cloud_page_probe", "display_menu", "player_menu", "restart_app", "quit_app"))
+                            require(operation in setOf("open", "alpha", "depth", "playing", "seek", "hold_pixels", "observe", "stereo", "profile", "close", "pixels", "subtitle", "display_quality", "sharpness", "cloud_accounts", "cloud_page_probe", "display_menu", "player_menu", "restart_app", "quit_app", "seek_policy_ui"))
                             val command = JSONObject().put("operation", operation).put("request_key", request)
                                 .put("value", intent.getFloatExtra("value", 0f).toDouble())
                                 .put("benchmark", intent.getBooleanExtra("benchmark", false))
@@ -100,6 +100,18 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                                 // 2D->3D: a mono open with depth (stereo=false) or the "depth" operation.
                                 .put("stereo", intent.getBooleanExtra("stereo", true))
                                 .put("depth", intent.getBooleanExtra("depth", false))
+                            if (intent.hasExtra("seek_mode")) {
+                                val mode = intent.getStringExtra("seek_mode")
+                                require(mode in setOf("speed", "exact"))
+                                command.put("seek_mode", mode)
+                            }
+                            if (operation == "seek_policy_ui") {
+                                val step = intent.getStringExtra("step")
+                                require(step in setOf("global_speed", "global_exact", "bookmark_global", "bookmark_speed", "bookmark_exact", "bookmark_add", "bookmark_seek", "bookmark_delete"))
+                                val marker = intent.getStringExtra("marker_id").orEmpty()
+                                require(marker.isEmpty() || marker.matches(Regex("[a-f0-9]{32}")))
+                                command.put("step", step).put("marker_id", marker)
+                            }
                             if (operation == "depth" && intent.hasExtra("strength")) {
                                 val strength = intent.getFloatExtra("strength", 1f)
                                 require(strength.isFinite() && strength in 0f..4f)

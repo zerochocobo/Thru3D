@@ -69,8 +69,13 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
                     "stash" -> if (account.key.isNotEmpty()) c.setRequestProperty("ApiKey", account.key)
                     "emby", "jellyfin" -> {
                         val scheme = if (account.provider == "emby") "Emby" else "MediaBrowser"
-                        c.setRequestProperty("Authorization", "$scheme Client=\"Quest Player\", Device=\"Quest\", DeviceId=\"${account.id}\", Version=\"0.2\"")
-                        if (account.key.isNotEmpty()) c.setRequestProperty("X-Emby-Token", account.key)
+                        var authorization = "$scheme Client=\"Quest Player\", Device=\"Quest\", DeviceId=\"${account.id}\", Version=\"0.2\""
+                        if (account.key.isNotEmpty()) {
+                            // Jellyfin 12 disables legacy token headers; keep its token in the MediaBrowser header.
+                            if (account.provider == "jellyfin") authorization += ", Token=\"${account.key}\""
+                            else c.setRequestProperty("X-Emby-Token", account.key)
+                        }
+                        c.setRequestProperty("Authorization", authorization)
                     }
                     "xbvr" -> if (account.username.isNotEmpty()) c.setRequestProperty("Authorization", "Basic " +
                         java.util.Base64.getEncoder().encodeToString("${account.username}:${account.key}".toByteArray(Charsets.UTF_8)))

@@ -7,6 +7,10 @@ const State := preload("res://scripts/mpv_media_state.gd")
 const Thumbnails := preload("res://scripts/thumbnail_cache.gd")
 const Binding := preload("res://scripts/pair_texture_binding.gd")
 const PlaybackControl := preload("res://scripts/playback_control.gd")
+const SeekPolicy := preload("res://scripts/seek_policy.gd")
+var seek_mode := SeekPolicy.SPEED
+var bookmark_seek_mode := SeekPolicy.GLOBAL
+var _last_seek_mode := SeekPolicy.SPEED
 const Log := preload("res://scripts/diagnostic_log.gd")
 const PixelProbe := preload("res://scripts/mpv_pixel_probe.gd")
 const SubtitleState := preload("res://scripts/mpv_subtitle_state.gd")
@@ -66,9 +70,15 @@ var subtitles := SubtitleState.new()
 var caption: Label3D
 const ColorGrade := preload("res://scripts/color_grade.gd")
 var color_grade := ColorGrade.new()
+const SubtitleDepth := preload("res://scripts/subtitle_depth.gd")
 var subtitle_distance := 5.0:
 	set(value):
-		subtitle_distance = clampf(value, 5.0, 20.0) if is_finite(value) else 5.0
+		subtitle_distance = SubtitleDepth.distance(value)
+var subtitle_position := SubtitleDepth.DEFAULT_POSITION:
+	set(value):
+		subtitle_position = SubtitleDepth.position(value)
+const ProjectedSubtitles := preload("res://scripts/projected_subtitles.gd")
+var projected_subtitles: Node
 const CAPTION_DROP := 0.244 # radians below the line of sight (14 degrees)
 const CAPTION_SLACK := 0.314 # radians (18 degrees) the head turns before the subtitles follow
 var _caption_direction := Vector3.ZERO
@@ -106,6 +116,7 @@ var _library_cover := ""
 var _freeze_sequence := 0
 var _freeze_request := 0
 var _seek_trace: Array[Dictionary] = []
+var _open_trace: Array[Dictionary] = []
 var _debug_seek_delay_until_ms := 0
 var _debug_request := 0
 var _debug_commands: Array = []
@@ -134,6 +145,8 @@ func _ready() -> void:
 	caption.width = 700
 	caption.visible = false
 	add_child(caption)
+	projected_subtitles = ProjectedSubtitles.new()
+	add_child(projected_subtitles)
 	if OS.get_name() == "Android" and Engine.has_singleton("QuestPlayer"):
 		platform = Engine.get_singleton("QuestPlayer")
 		platform.connect("local_video_selected", _on_selected)
@@ -148,14 +161,13 @@ func _ready() -> void:
 		platform.connect("mpv_frozen_pair", _on_frozen_pair)
 		if platform.has_signal("rvm_warmup"):
 			platform.connect("rvm_warmup", _on_rvm_warmup)
-	_warm_rvm()
-	if OS.get_name() == "Android" and Engine.has_singleton("QuestPlayer"):
-		Engine.get_singleton("QuestPlayer").warm_depth()
+	# First photo use should not queue behind unrelated video-model cold compilation.
 	_apply_geometry()
 
 # First use of an Alpha profile compiles/tunes GPU kernels; start it before playback.
 var rvm_warmup := {}
 func _warm_rvm() -> void:
+	if local_uri.is_empty(): return
 	# JNISingleton.has_method() does not see Java plugin methods; test doubles never set this singleton.
 	if OS.get_name() == "Android" and Engine.has_singleton("QuestPlayer"):
 		Engine.get_singleton("QuestPlayer").warm_rvm(profile)
@@ -366,6 +378,7 @@ func play_calibration_clip() -> void:
 	open_local("file://" + ProjectSettings.globalize_path(path), filename, 0, false)
 
 func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: bool = true, alpha: bool = false, basename: String = "", metadata: Dictionary = {}) -> bool:
+	_open_trace = [{"stage": "requested", "time_ms": Time.get_ticks_msec(), "start_ms": start_ms}]
 	if not platform or not platform.mpv_supported():
 		picker_error = "MPV playback backend unavailable"
 		changed.emit()
@@ -414,6 +427,9 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 	if _thumbnail_source(uri) and Thumbnails.texture(uri) == null:
 		_thumb_after_ms = 0
 	local_uri = uri
+	_warm_rvm()
+	if auto_depth and OS.get_name() == "Android" and Engine.has_singleton("QuestPlayer"):
+		Engine.get_singleton("QuestPlayer").warm_depth()
 	display_name = title
 	_bookmark_metadata = metadata.duplicate(true)
 	if not basename.is_empty(): _bookmark_metadata.basename = basename
@@ -427,9 +443,11 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 		if source: _bookmark_metadata.size = source.get_length()
 	_bookmark_resolve()
 	depth_requested = auto_depth and geometry == Geometry.Geometry.FLAT and not stereo_sbs and not alpha_requested
+	_last_seek_mode = SeekPolicy.normalize(seek_mode)
 	var id: int = platform.open_mpv_video(uri, maxi(start_ms, 0), stereo_sbs, profile, alpha_requested, true, depth_requested,
-		stereo_sbs and top_bottom)
+		stereo_sbs and top_bottom, SeekPolicy.normalize(seek_mode) == SeekPolicy.EXACT)
 	media.begin(id)
+	_open_trace.append({"stage": "dispatched", "time_ms": Time.get_ticks_msec(), "session_id": id})
 	_remember_file = restore_mode and id > 0
 	_history_started = false
 	_file_permission_persisted = false
@@ -524,11 +542,12 @@ func _record_history(force: bool = false) -> void:
 	if not recent_files.save():
 		Log.record("recent_file_save_failed", {"error": recent_files.last_error})
 
-func _request_revision(position_ms: int = -1) -> void:
+func _request_revision(position_ms: int = -1, mode: String = "") -> void:
 	if not platform or not media.accepts(media.session_id):
 		return
 	_pending_revision = {"stereo": stereo_sbs, "alpha": alpha_requested, "profile": profile, "position_ms": position_ms,
-		"depth": depth_requested and not alpha_requested and not stereo_sbs, "top_bottom": stereo_sbs and top_bottom}
+		"depth": depth_requested and not alpha_requested and not stereo_sbs, "top_bottom": stereo_sbs and top_bottom,
+		"seek_mode": SeekPolicy.normalize(seek_mode if mode.is_empty() else mode)}
 	platform.set_mpv_playing(media.session_id, false)
 	_waiting_first = true
 	subtitles.clear()
@@ -604,7 +623,7 @@ func _try_revision() -> void:
 		return
 	var request := _pending_revision
 	var id: int = platform.revise_mpv_video(media.session_id, request.stereo, request.alpha, request.profile, request.position_ms,
-		request.depth, request.top_bottom)
+		request.depth, request.top_bottom, request.seek_mode == SeekPolicy.EXACT)
 	if id <= 0:
 		return
 	if int(request.position_ms) < 0 or not _is_frozen(): _unbind()
@@ -615,6 +634,7 @@ func _try_revision() -> void:
 	if _is_frozen(): media.format = held_format
 	platform.set_mpv_playing(id, false)
 	if int(request.position_ms) >= 0:
+		_last_seek_mode = request.seek_mode
 		control.take_pending()
 		_debug_seek_delay_until_ms = 0
 		_seek_event("seek_started")
@@ -742,6 +762,13 @@ func set_audio_options(track_id: int, volume: float, muted: bool) -> bool:
 	changed.emit()
 	return true
 
+## An explicit menu choice wins over automatic dubbing, including before the first frame.
+func select_audio_track(track_id: int) -> bool:
+	if not set_audio_options(track_id, audio_volume, audio_muted): return false
+	_clone_applied = true
+	prefer_clone_voice = clone_voice_track() > 0 and track_id == clone_voice_track()
+	return true
+
 ## Raising the volume unmutes (a muted slider shows 0, so a silent step up would look ignored);
 ## lowering keeps mute.
 func change_volume(delta: float) -> bool:
@@ -763,11 +790,11 @@ func cycle_audio_track(direction: int = 1) -> bool:
 	var index := choices.find(current)
 	return set_audio_options(choices[posmod(index + direction, choices.size())], audio_volume, audio_muted)
 
-func seek_absolute(position_ms: int) -> bool:
+func seek_absolute(position_ms: int, mode: String = "") -> bool:
 	if not platform or not media.accepts(media.session_id):
 		return false
 	control.seek_absolute(position_ms)
-	_request_revision(control.target_ms)
+	_request_revision(control.target_ms, mode)
 	return true
 
 func _bookmark_resolve() -> void:
@@ -798,7 +825,9 @@ func bookmarks_snapshot() -> Dictionary:
 		_bookmark_cache_revision = bookmark_store.revision
 	return {"bookmark_scope": bookmark_scope(), "bookmarks": _bookmark_rows,
 		"bookmark_revision": bookmark_store.revision, "bookmark_undo": bookmark_store.can_undo(),
-		"bookmark_ready": not bookmark_snapshot().is_empty(), "bookmark_seekable": bookmark_seekable()}
+		"bookmark_ready": not bookmark_snapshot().is_empty(), "bookmark_seekable": bookmark_seekable(),
+		"seek_mode": SeekPolicy.normalize(seek_mode), "bookmark_seek_mode": SeekPolicy.bookmark_override(bookmark_seek_mode),
+		"bookmark_effective_seek_mode": SeekPolicy.effective(seek_mode, bookmark_seek_mode)}
 
 func bookmark_action(operation: String, marker_id: String, scope: String) -> String:
 	if scope != bookmark_scope(): return ""
@@ -817,7 +846,7 @@ func bookmark_action(operation: String, marker_id: String, scope: String) -> Str
 			if not bookmark_seekable(): return ""
 			for marker in bookmark_store.list_markers(_bookmark_media_id):
 				if marker.id == marker_id and int(marker.position_ms) < control.duration_ms:
-					return "" if seek_absolute(int(marker.position_ms)) else "Bookmark jump failed"
+					return "" if seek_absolute(int(marker.position_ms), SeekPolicy.effective(seek_mode, bookmark_seek_mode)) else "Bookmark jump failed"
 	return ""
 
 func set_subtitle_track(track_id: int) -> bool:
@@ -828,6 +857,8 @@ func set_subtitle_track(track_id: int) -> bool:
 	subtitles.select(track_id)
 	if caption:
 		caption.visible = false
+	if projected_subtitles:
+		projected_subtitles.clear(material)
 	changed.emit()
 	return true
 
@@ -847,6 +878,7 @@ func _poll_subtitles() -> void:
 		and not _waiting_first and _pending_revision.is_empty() and panel.visible
 	if not ready:
 		caption.visible = false
+		projected_subtitles.clear(material)
 		return
 	var now := Time.get_ticks_msec()
 	if now >= _subtitle_poll_ms:
@@ -861,6 +893,8 @@ func _poll_subtitles() -> void:
 	caption.visible = not subtitles.text.is_empty()
 	if caption.visible:
 		_place_caption()
+	else:
+		projected_subtitles.clear(material)
 
 func _place_caption() -> void:
 	var now := Time.get_ticks_msec()
@@ -872,15 +906,15 @@ func _place_caption() -> void:
 		eye = view_camera.global_position
 		forward = -view_camera.global_basis.z
 	if geometry == Geometry.Geometry.FLAT:
-		# Project the screen's lower edge onto the chosen distance from the cyclopean eye.
-		# Scale the whole text plane equally: angular placement and size remain unchanged.
+		# Ordinary video captions stay on the screen, independent of immersive preferences.
 		var anchor := panel.global_transform * Vector3(0, -_flat.size.y * 0.5 + 0.06, 0.01)
-		var offset := anchor - eye
-		var scale_factor := subtitle_distance / maxf(offset.length(), 0.01)
 		caption.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-		caption.pixel_size = 0.0016 * scale_factor
+		caption.layers = 1
+		projected_subtitles.clear(material)
+		caption.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		caption.pixel_size = 0.0016
 		caption.width = _flat.size.x * 0.9 / 0.0016
-		caption.global_transform = Transform3D(panel.global_basis, eye + offset * scale_factor)
+		caption.global_transform = Transform3D(panel.global_basis, anchor)
 		_caption_direction = Vector3.ZERO
 		return
 	# Lazy follow: still while the head looks around a little, then glides back in front.
@@ -891,12 +925,22 @@ func _place_caption() -> void:
 		_caption_direction = _caption_direction.slerp(forward, minf(1.0, delta * 4.0)).normalized()
 	var up := Vector3.UP if absf(_caption_direction.y) < 0.98 else Vector3.BACK
 	var facing := Basis.looking_at(_caption_direction, up)
-	var place := facing * (Basis(Vector3.RIGHT, -CAPTION_DROP) * Vector3(0, 0, -subtitle_distance))
+	var place := facing * (Basis(Vector3.RIGHT, SubtitleDepth.elevation(subtitle_position)) * Vector3(0, 0, -subtitle_distance))
 	# Same angular size at any distance.
 	caption.pixel_size = 0.001 * subtitle_distance
 	caption.width = 700
+	caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	caption.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	caption.global_transform = Transform3D(Basis(), eye + place)
+	caption.layers = 0 # Immersive glyphs are drawn once, inside the video projection below.
+	var ray := place.normalized()
+	var relative := eye - panel.global_position
+	var b := relative.dot(ray)
+	var along := -b + sqrt(maxf(0, b * b - relative.length_squared() + SPHERE_RADIUS * SPHERE_RADIUS))
+	var local_direction := panel.global_basis.inverse() * (eye + ray * along - panel.global_position)
+	var local_up := panel.global_basis.inverse() * (view_camera.global_basis.y if view_camera else Vector3.UP)
+	var anchor_basis := Basis.looking_at(local_direction.normalized(), local_up.normalized())
+	projected_subtitles.update_patch(caption, material, anchor_basis, subtitle_distance, ProjectedSubtitles.runtime_ipd())
 
 func seek_relative(delta_ms: int) -> bool:
 	if not platform or not media.accepts(media.session_id):
@@ -1106,9 +1150,16 @@ func _present_pending() -> void:
 	if _waiting_first:
 		if control.in_flight > 0: _seek_event("target_presented")
 		_waiting_first = false
-		control.first_frame()
+		var actual_position_ms := int(int(claimed.pts_us) / 1000)
+		if control.in_flight > 0:
+			control.first_frame(actual_position_ms)
+		else:
+			control.observe(actual_position_ms, control.duration_ms)
 		platform.set_mpv_playing(media.session_id, requested_play)
+	else:
+		control.observe(int(int(claimed.pts_us) / 1000), control.duration_ms)
 	if media.frame_counter == 1:
+		_open_trace.append({"stage": "first_pair_bound", "time_ms": Time.get_ticks_msec(), "pts_us": int(claimed.pts_us)})
 		_complete_layout()
 		_remember_mode()
 		Log.record("mpv_pair_bound", media.frame_identity())
@@ -1134,7 +1185,13 @@ func _on_state(id: int, payload: String) -> void:
 		_bookmark_metadata.size = int(size)
 		_bookmark_resolve()
 	if details.has("position_seconds"):
-		control.observe(int(float(details.position_seconds) * 1000), int(float(details.get("duration_seconds", "-1")) * 1000))
+		var position_ms := int(float(details.position_seconds) * 1000)
+		# MPV's time-pos may still be the requested time after a paused keyframe
+		# seek. Keep the timeline and relative shortcuts on the displayed frame.
+		var pair: Dictionary = media.last_pair
+		if pair.get("source_pts_verified", false) and int(pair.get("session_id", -1)) == media.session_id:
+			position_ms = int(int(pair.pts_us) / 1000)
+		control.observe(position_ms, int(float(details.get("duration_seconds", "-1")) * 1000))
 		media.decoder = str(details.get("codec", "")) + " / " + str(details.get("hwdec_current", ""))
 	media.state = str(report.get("state", "opening"))
 	if media.state == "ended":
@@ -1182,6 +1239,8 @@ func _reopen_after_context_loss(uri: String, title: String, position_ms: int, re
 
 func _on_debug_command(id: int, payload: String) -> void:
 	var command: Variant = JSON.parse_string(payload)
+	if command is Dictionary and command.get("operation", "") in ["open", "seek"] and command.get("seek_mode", "") in [SeekPolicy.SPEED, SeekPolicy.EXACT]:
+		seek_mode = command.seek_mode
 	if not command is Dictionary:
 		return
 	_debug_request = id
@@ -1199,7 +1258,7 @@ func _on_debug_command(id: int, payload: String) -> void:
 		depth_requested = bool(command.get("depth", false))
 		auto_depth = depth_requested
 		requested_play = true
-		open_local(str(command.uri), str(command.title), 0, false, alpha_requested)
+		open_local(str(command.uri), str(command.title), maxi(int(command.position_ms), 0), false, alpha_requested)
 	elif command.operation == "alpha":
 		set_alpha(bool(command.enabled))
 	elif command.operation == "depth":
@@ -1289,6 +1348,8 @@ func _write_debug_report() -> void:
 				"thumb_x": menu._thumb.position.x, "bar_width": menu.BAR_SEEK,
 				"duration_ms": int(menu._state.get("duration_ms", -1))}
 	var report := {"schema_version": 1, "request_id": _debug_request, "commands": _debug_commands,
+		"seek_policy_ui": host.seek_policy_probe_result if host and host.get("seek_policy_probe_result") is Dictionary else {},
+		"open_trace": _open_trace.duplicate(true),
 		"media": media.snapshot(), "layout": layout_snapshot(), "pairs": _debug_pairs,
 		"native_status": _debug_status, "engine_fps": Engine.get_frames_per_second(),
 		"sample_monotonic_us": now, "engine_drawn_frames": Engine.get_frames_drawn(),
@@ -1316,7 +1377,10 @@ func reset_view() -> void:
 
 func layout_snapshot() -> Dictionary:
 	var playback := control.snapshot()
-	playback["seek_method"] = "mpv_absolute_exact_and_processing_generation"
+	playback["seek_method"] = "mpv_absolute_" + ("exact" if _last_seek_mode == SeekPolicy.EXACT else "keyframes") + "_and_processing_generation"
+	playback["seek_mode"] = SeekPolicy.normalize(seek_mode)
+	playback["active_seek_mode"] = _last_seek_mode
+	playback["bookmark_seek_mode"] = SeekPolicy.bookmark_override(bookmark_seek_mode)
 	playback["source_frame_pts_verified"] = not media.last_pair.is_empty()
 	return {"geometry": ["flat", "half_equirect_180", "fisheye_180", "equirect_360"][geometry], "stereo_sbs": stereo_sbs,
 		"top_bottom": stereo_sbs and top_bottom, "fisheye_fov": fisheye_fov,
@@ -1324,7 +1388,11 @@ func layout_snapshot() -> Dictionary:
 		"depth_requested": depth_requested, "depth_enabled": depth_enabled, "depth_strength": depth_strength, "auto_depth": auto_depth,
 		"alpha_ready": alpha_ready(), "backend": "Android_libmpv", "loop_enabled": loop_enabled,
 		"playback_control": playback, "subtitles": {"requested_track": subtitles.requested_track,
-			"cue": subtitles.cue, "text": subtitles.text, "render_layer": "independent_Label3D",
+			"cue": subtitles.cue, "text": subtitles.text,
+			"render_layer": "independent_Label3D" if geometry == Geometry.Geometry.FLAT else "video_projection_overlay",
+			"distance_m": subtitle_distance, "position": subtitle_position,
+			"runtime_ipd_m": ProjectedSubtitles.runtime_ipd(),
+			"angular_parallax_rad": material.get_shader_parameter("subtitle_parallax"),
 			"source_frame_sync_verified": false, "device_validation": "pending"},
 		"frame_hold": {"visible": panel.visible, "frozen": _is_frozen(), "capture_pending": _freeze_request > 0,
 			"frame_id": int(_binding.ticket.get("frame_id", -1)), "pts_us": int(_binding.ticket.get("pts_us", -1)),

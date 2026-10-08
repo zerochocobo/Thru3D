@@ -19,6 +19,9 @@ var queue_provider: Callable
 var _gallery_open := false
 var _gallery_start := 0
 
+func _depth_maximum() -> float:
+	return DepthStrength.PHOTO_MAX
+
 func _reset_navigation() -> void:
 	super._reset_navigation()
 	_gallery_open = false
@@ -29,7 +32,7 @@ func refresh_values() -> void:
 	if latest != _state:
 		var old_layout := _state.duplicate()
 		var new_layout := latest.duplicate()
-		for key in ["depth_strength", "depth_requested", "depth_enabled", "depth_error"]:
+		for key in ["depth_strength", "depth_requested", "depth_enabled", "depth_error", "stereo_strategy", "stereo_ready", "render_strength"]:
 			old_layout.erase(key); new_layout.erase(key)
 		_state = latest
 		if old_layout != new_layout:
@@ -115,9 +118,8 @@ func _draw_gallery() -> void:
 			var image := MeshInstance3D.new()
 			var quad := QuadMesh.new(); quad.size = Vector2(0.18, 0.10125)
 			image.mesh = quad
-			var mat := StandardMaterial3D.new()
-			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED; mat.albedo_texture = texture
-			mat.no_depth_test = true; mat.render_priority = 14
+			var mat := _material(Color.WHITE, 14)
+			mat.albedo_texture = texture
 			image.material_override = mat; image.position.z = 0.005
 			button.node.add_child(image)
 		var caption := _label(_fit_title(str(entry.get("title", "")), "", 0.18, 12), Vector3(0,-0.077,0.008),12,button.node)
@@ -172,7 +174,7 @@ func _activate(target: int) -> void:
 	refresh()
 
 func _photo_status() -> String:
-	if _state.get("loading", false): return I18n.t("Loading image")
+	if _state.get("loading", false): return I18n.t("Preparing 3D" if _state.get("preparing_depth", false) else "Loading image")
 	if not str(_state.get("error", "")).is_empty(): return I18n.t(str(_state.error))
 	if not str(_state.get("depth_error", "")).is_empty(): return I18n.t(str(_state.depth_error))
 	if _state.get("depth_requested", false): return I18n.t("3D on" if _state.get("depth_enabled", false) else "Preparing 3D")

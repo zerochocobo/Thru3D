@@ -4,13 +4,12 @@ const Actions := preload("res://scripts/cloud_account_actions.gd")
 var failures: Array[String] = []
 var checks := 0
 
-class Platform extends Object:
+class Platform extends "res://tests/account_platform_fixture.gd":
 	signal media_list(id: int, payload: String)
 	signal android_lifecycle(state: String)
 	var requests: Array[Dictionary] = []
 	var cancelled: Array[int] = []
 	var setups := 0
-	func media_cloud_accounts() -> void: setups += 1
 	func media_cloud_page(path: String, offset: int, force: bool) -> int:
 		requests.append({"action": "browse", "path": path, "offset": offset}); return requests.size()
 	func media_cloud_cancel(id: int) -> void: cancelled.append(id)
@@ -37,11 +36,12 @@ func _run() -> void:
 	check(menu._buttons.any(func(b): return b.target == Actions.EDIT and b.enabled), "cloud edit is visible")
 	check(menu._buttons.any(func(b): return b.target == Actions.REMOVE and b.enabled), "cloud remove is visible")
 	menu._activate(Actions.EDIT)
-	check(platform.setups == 1 and menu._cloud_setup, "edit opens native account management")
+	check(menu.account_panel.view == "accounts" and not menu._cloud_setup, "edit opens in-app account management")
+	menu.account_panel.close()
 	platform.changed()
 	mounts[0].title = "Renamed"
 	platform.answer(mounts)
-	check(menu.rows[0].title == "Renamed" and not menu._cloud_setup, "native rename refreshes without resume")
+	check(menu.rows[0].title == "Renamed" and not menu._cloud_setup, "rename refreshes without resume")
 	menu._choose(menu.rows[0])
 	platform.answer([{ "id": "/first/folder", "title": "Folder", "container": true }])
 	menu._cloud_stack.append({"id": "/first/long/folder", "title": "A very long nested folder name"})

@@ -34,6 +34,7 @@ function Read-Json([string]$file) {
     try { return $text | ConvertFrom-Json } catch { return $null }
 }
 function Request([string]$label, [string]$operation, [string[]]$extras=@()) {
+    if ($operation -in @('open','seek')) { $extras += @('--es','seek_mode','exact') }
     $key = $label + '_' + [guid]::NewGuid().ToString('N')
     $action = if ($operation -eq 'launch') { 'DEBUG_LAUNCH' } else { 'DEBUG_PLAYER_MPV' }
     $args = @('-s',$Serial,'shell','am','broadcast','-n',"$package/org.vrpassthroughplayer.plugin.DebugDiagnosticsReceiver",'-a',"$package.$action",'--es','request',$key)

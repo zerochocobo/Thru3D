@@ -1,0 +1,91 @@
+extends SceneTree
+const Video := preload("res://scripts/mpv_video_display.gd")
+var failures: Array[String] = []
+func centroid(image: Image) -> Vector2:
+	var mass := 0.0
+	var total := Vector2.ZERO
+	for y in range(380, 565):
+		for x in range(380, 930):
+			var c := image.get_pixel(x, y)
+			var w := maxf(0, minf(c.r, minf(c.g, c.b)) - 0.4)
+			mass += w; total += Vector2(x, y) * w
+	if mass < 2: failures.append("Projected text is missing")
+	return total / maxf(mass, 0.001)
+func _initialize(): call_deferred("_run")
+func _run():
+	var output := OS.get_environment("PROJECTED_SUBTITLE_OUTPUT")
+	if output.is_empty(): quit(1); return
+	DirAccess.make_dir_recursive_absolute(output)
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(1280, 720)
+	viewport.own_world_3d = true
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(viewport)
+	var head := Camera3D.new()
+	viewport.add_child(head)
+	var eye := Camera3D.new()
+	eye.fov = 90
+	viewport.add_child(eye)
+	eye.make_current()
+	var video := Video.new()
+	viewport.add_child(video)
+	video.set_process(false)
+	video.view_camera = head
+	video.caption.visible = true
+	video.caption.text = "I"
+	var shader := Shader.new()
+	var source: String = load("res://shaders/video_rvm_pair.gdshader").code
+	shader.code = source.replace("void vertex() {", "uniform int probe_eye = 0;\nvoid vertex() {").replace("eye_index = int(VIEW_INDEX);", "eye_index = probe_eye;")
+	video.material.shader = shader
+	var colour := Image.create(2, 2, false, Image.FORMAT_RGB8); colour.fill(Color(0.1, 0.2, 0.35))
+	var alpha := Image.create(2, 2, false, Image.FORMAT_R8); alpha.fill(Color.BLACK)
+	video.material.set_shader_parameter("color_texture", ImageTexture.create_from_image(colour))
+	video.material.set_shader_parameter("alpha_texture", ImageTexture.create_from_image(alpha))
+	video.material.set_shader_parameter("source_size", Vector2(2, 2))
+	video.material.set_shader_parameter("model_size", Vector2(2, 2))
+	video.material.set_shader_parameter("sharpness", 0)
+	var samples: Array[Dictionary] = []
+	for geometry in [1, 2, 3]:
+		video.geometry = geometry
+		video._apply_geometry()
+		video.panel.visible = true
+		for distance in [0.5, 2.0, 20.0]:
+			video.subtitle_distance = distance
+			video._caption_direction = Vector3.ZERO
+			video._place_caption()
+			var centers: Array[Vector2] = []
+			for index in 2:
+				eye.position.x = (index - 0.5) * 0.063
+				video.material.set_shader_parameter("probe_eye", index)
+				video.material.set_shader_parameter("alpha_enabled", geometry == 2)
+				await process_frame
+				await RenderingServer.frame_post_draw
+				await RenderingServer.frame_post_draw
+				var pixels := viewport.get_texture().get_image()
+				centers.append(centroid(pixels))
+				if distance == 20: pixels.save_png(output.path_join("geometry%d_eye%d.png" % [geometry,index]))
+			var angle := 2.0 * atan(0.063 / (2.0 * distance))
+			# Reference source-longitude shift, plus the shared video's 50m projection surface.
+			var expected := 360.0 * (tan(angle) + 0.063 / (50.0 * cos(video.CAPTION_DROP)))
+			var actual := centers[0].x - centers[1].x
+			var expected_y := 360.0 * tan(video.CAPTION_DROP) * (1.0 - 1.0 / cos(angle))
+			var actual_y := centers[0].y - centers[1].y
+			if absf(actual - expected) > 0.9 or absf(actual_y - expected_y) > 0.4: failures.append("Geometry/parallax mismatch")
+			samples.append({"geometry":geometry,"distance_m":distance,"actual_pixels":actual,"expected_pixels":expected,"vertical_pixels":actual_y,"expected_vertical_pixels":expected_y})
+	video.projected_subtitles.clear(video.material)
+	video.material.set_shader_parameter("alpha_enabled", true)
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var dark := viewport.get_texture().get_image()
+	var bright := 0
+	for y in range(380,565):
+		for x in range(380,930):
+			var c := dark.get_pixel(x,y)
+			if minf(c.r,minf(c.g,c.b))>0.8: bright+=1
+	if bright != 0: failures.append("CC Off leaves projected glyphs")
+	var report := {"state":"passed" if failures.is_empty() else "failed","samples":samples,"failures":failures,"scope":"Production video shader + actual projected glyph texture, two desktop eye cameras; native XR acceptance remains separate"}
+	FileAccess.open(output.path_join("verification.json"),FileAccess.WRITE).store_string(JSON.stringify(report,"\t"))
+	print(JSON.stringify(report))
+	viewport.queue_free()
+	await process_frame
+	quit(0 if failures.is_empty() else 1)

@@ -3,6 +3,7 @@
 // DepthStabilizer turns it into the 0..1 near map exactly as PTMediaServer's realtime path does
 // (scene cut, smoothed percentile band, VVPS base/detail stabilizer, foreground dilation).
 #include "depth_stabilizer.h"
+#include "photo_depth.h"
 #include <MNN/Interpreter.hpp>
 #include <MNN/MNNForwardType.h>
 #include <MNN/Tensor.hpp>
@@ -29,6 +30,7 @@ extern "C" void vrpp_set_cl_priority(int priority);
 
 namespace {
 constexpr const char* kModelAsset = "depth-mnn/depth.mnn";
+constexpr const char* kPhotoModelAsset = "depth-mnn/photo_depth.mnn";
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -49,9 +51,9 @@ std::string text(JNIEnv* env, jstring value) {
 }
 
 using AssetPtr = std::unique_ptr<AAsset, decltype(&AAsset_close)>;
-AssetPtr open_model(JNIEnv* env, jobject assets) {
+AssetPtr open_model(JNIEnv* env, jobject assets, const char* path = kModelAsset) {
     require(assets != nullptr, "Depth model needs assets");
-    AssetPtr asset(AAssetManager_open(AAssetManager_fromJava(env, assets), kModelAsset, AASSET_MODE_BUFFER), AAsset_close);
+    AssetPtr asset(AAssetManager_open(AAssetManager_fromJava(env, assets), path, AASSET_MODE_BUFFER), AAsset_close);
     require(asset != nullptr, "Depth model asset missing");
     require(AAsset_getBuffer(asset.get()) && AAsset_getLength64(asset.get()) > 0, "Depth model asset unreadable");
     return asset;
@@ -60,8 +62,10 @@ AssetPtr open_model(JNIEnv* env, jobject assets) {
 // OpenCL memory mode. Buffers run ViT-S ~30% faster than images on Adreno 740 (MNN benchmark,
 // 252x140: 37 vs 54 ms): the linear layers use the GEMM/Strassen kernels and fewer rasters.
 // Debug builds can compare: adb shell setprop debug.vrpp.depth.gpumode <MNN_GPU_* bits>.
-int gpu_mode() {
-    int mode = MNN_GPU_TUNING_WIDE | MNN_GPU_MEMORY_BUFFER;
+int gpu_mode(bool photo = false) {
+    // A still photo must not wait for a wide search over the large attention graph.
+    // Video keeps its established throughput tuning; photo programs use a separate cache.
+    int mode = (photo ? MNN_GPU_TUNING_FAST : MNN_GPU_TUNING_WIDE) | MNN_GPU_MEMORY_BUFFER;
     char value[PROP_VALUE_MAX] = {};
     if (__system_property_get("debug.vrpp.depth.gpumode", value) > 0) {
         const int requested = std::atoi(value);
@@ -81,7 +85,7 @@ int depth_priority() {
     return 0;
 }
 
-std::string cache_path(AAsset* model, const std::string& directory) {
+std::string cache_path(AAsset* model, const std::string& directory, bool photo = false) {
     if (directory.empty()) return {};
     const auto* data = static_cast<const unsigned char*>(AAsset_getBuffer(model));
     const auto bytes = static_cast<size_t>(AAsset_getLength64(model));
@@ -96,7 +100,7 @@ std::string cache_path(AAsset* model, const std::string& directory) {
     char tag[17];
     snprintf(tag, sizeof(tag), "%016llx", static_cast<unsigned long long>(hash));
     // Tuned kernels belong to one memory mode: each mode keeps its own cache.
-    return directory + "/mnn_depth_fp16_" + tag + "_m" + std::to_string(gpu_mode()) + ".cache";
+    return directory + "/mnn_depth_fp16_" + tag + "_m" + std::to_string(gpu_mode(photo)) + ".cache";
 }
 
 struct Depth final {
@@ -112,8 +116,11 @@ struct Depth final {
     uint64_t frames = 0, cuts = 0;
     std::mutex operation;
     std::atomic<bool> closed{false};
+    bool photo = false;
+    int mode = 0;
 
-    Depth(const void* model, size_t bytes, const std::string& cache) {
+    Depth(const void* model, size_t bytes, const std::string& cache, bool for_photo = false) : photo(for_photo) {
+        mode = gpu_mode(photo);
         const auto started = std::chrono::steady_clock::now();
         net.reset(MNN::Interpreter::createFromBuffer(model, bytes), MNN::Interpreter::destroy);
         require(net != nullptr, "MNN depth model rejected");
@@ -121,7 +128,7 @@ struct Depth final {
         MNN::ScheduleConfig config;
         config.type = MNN_FORWARD_OPENCL;
         config.backupType = MNN_FORWARD_CPU; // Only so placement can be audited and rejected.
-        config.numThread = gpu_mode();
+        config.numThread = mode;
         MNN::BackendConfig backend;
         backend.precision = MNN::BackendConfig::Precision_Low;
         backend.power = MNN::BackendConfig::Power_High;
@@ -168,20 +175,38 @@ struct Depth final {
         }
     }
 
-    /** rgb: float32 CHW in [0, 1]. near: float32 HxW in [0, 1], 1 = nearest. */
-    void process(const float* rgb, float* near, bool reset, int frame_step) {
-        const auto started = std::chrono::steady_clock::now();
+    void infer(const float* rgb) {
         const size_t plane = static_cast<size_t>(width) * height;
         std::memcpy(src_host->host<float>(), rgb, plane * 3 * sizeof(float));
         src->copyFromHostTensor(src_host.get());
         require(net->runSession(session) == MNN::NO_ERROR, "MNN depth inference failed");
         out->copyToHostTensor(out_host.get()); // Blocking read completes the queue.
+    }
+
+    /** rgb: float32 CHW in [0, 1]. near: float32 HxW in [0, 1], 1 = nearest. */
+    void process(const float* rgb, float* near, bool reset, int frame_step) {
+        require(!photo, "Video processing needs the video depth model");
+        const auto started = std::chrono::steady_clock::now();
+        infer(rgb);
         if (!stabilizer) stabilizer = std::make_unique<quest::DepthStabilizer>(width, height);
         if (reset) stabilizer->reset();
         const auto inferred = std::chrono::steady_clock::now();
         stabilizer->process(out_host->host<float>(), rgb, frame_step, near);
         stabilize_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inferred).count();
         if (stabilizer->last_cut()) ++cuts;
+        ++frames;
+        last_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    }
+
+    void process_photo(const float* rgb, float* near, int x, int y, int cw, int ch) {
+        require(photo, "Photo processing needs the photo depth model");
+        require(x >= 0 && y >= 0 && cw > 0 && ch > 0 && cw <= width && ch <= height &&
+                x <= width - cw && y <= height - ch, "Invalid photo depth content rectangle");
+        const auto started = std::chrono::steady_clock::now();
+        infer(rgb);
+        const auto inferred = std::chrono::steady_clock::now();
+        quest::photo_near_map(out_host->host<float>(), width, height, x, y, cw, ch, near);
+        stabilize_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inferred).count();
         ++frames;
         last_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     }
@@ -231,8 +256,42 @@ Java_org_vrpassthroughplayer_plugin_DepthNative_describe(JNIEnv* env, jclass, jl
     try {
         const auto depth = find(handle);
         std::ostringstream json;
-        json << "{\"width\":" << depth->width << ",\"height\":" << depth->height << ",\"gpu_mode\":" << gpu_mode() << ",\"priority\":" << depth_priority() << ",\"prepare_ms\":" << depth->prepare_ms
+        json << "{\"width\":" << depth->width << ",\"height\":" << depth->height << ",\"gpu_mode\":" << depth->mode << ",\"priority\":" << depth_priority() << ",\"prepare_ms\":" << depth->prepare_ms
              << ",\"gpu_ops\":" << depth->gpu_ops << ",\"cpu_fallback_ops\":" << depth->host_ops.size() << '}';
+        return env->NewStringUTF(json.str().c_str());
+    } catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_vrpassthroughplayer_plugin_DepthNative_createPhoto(JNIEnv* env, jclass, jobject assets, jstring directory) {
+    try {
+        const auto model = open_model(env, assets, kPhotoModelAsset);
+        auto depth = std::make_shared<Depth>(AAsset_getBuffer(model.get()), static_cast<size_t>(AAsset_getLength64(model.get())),
+                                             cache_path(model.get(), text(env, directory), true), true);
+        require(depth->width == 518 && depth->height == 518, "Photo depth model shape differs");
+        std::lock_guard<std::mutex> guard(registry_mutex);
+        const jlong handle = next_handle++;
+        registry.emplace_back(handle, std::move(depth));
+        return handle;
+    } catch (const std::exception& error) { fail(env, error.what()); return 0; }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_org_vrpassthroughplayer_plugin_DepthNative_processPhoto(JNIEnv* env, jclass, jlong handle, jobject rgb, jobject near,
+                                                            jint x, jint y, jint width, jint height) {
+    try {
+        const auto depth = find(handle);
+        std::unique_lock<std::mutex> guard(depth->operation, std::try_to_lock);
+        require(guard.owns_lock(), "Depth runtime busy; no requests queued");
+        const size_t plane = static_cast<size_t>(depth->width) * depth->height;
+        const float* input = direct(env, rgb, plane * 3);
+        float* output = direct(env, near, plane);
+        for (size_t p = 0; p < plane * 3; ++p)
+            if (!(input[p] >= 0.f && input[p] <= 1.f)) throw std::runtime_error("Depth RGB outside [0,1]");
+        depth->process_photo(input, output, x, y, width, height);
+        std::ostringstream json;
+        json << "{\"state\":\"" << (depth->closed.load() ? "stale" : "ready") << "\",\"depth_ms\":" << depth->last_ms
+             << ",\"normalize_ms\":" << depth->stabilize_ms << ",\"frames\":" << depth->frames << '}';
         return env->NewStringUTF(json.str().c_str());
     } catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
 }

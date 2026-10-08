@@ -39,20 +39,21 @@ internal object CloudLibrary {
         return CloudDrive(account.getString("provider"), account.getString("cookie"), http, cache)
     }
 
-    fun connect(provider: String, name: String, cookie: String, id: String? = null) = safe {
+    fun connect(provider: String, name: String, cookie: String, id: String? = null,
+        commit: ((() -> Unit) -> Unit) = { it() }) = safe {
         require(provider in providers && name.isNotBlank() && CloudHttp.validCookie(cookie))
         val account = JSONObject().put("id", id ?: UUID.randomUUID().toString()).put("provider", provider)
             .put("name", name.trim().take(80)).put("cookie", cookie)
         // Validate the session with a single page, even when the root contains many files.
         CloudDrive(provider, cookie).page("/")
-        synchronized(this) {
+        commit { synchronized(this) {
             if (id != null && credentials(id).getString("provider") != provider) throw CloudFailure()
             val updated = JSONArray()
             for (i in 0 until saved.length()) if (saved.getJSONObject(i).getString("id") != id) updated.put(saved.getJSONObject(i))
             updated.put(account)
             store.save(updated); saved = updated
             if (id != null) revoke(id)
-        }
+        } }
         CloudAccountChanges.emit()
     }
     fun rename(id: String, name: String) = safe {

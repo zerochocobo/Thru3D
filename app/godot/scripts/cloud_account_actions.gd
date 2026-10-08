@@ -53,7 +53,7 @@ func action(target: int) -> bool:
 	if target not in [EDIT, REMOVE, BACK]: return false
 	if request_id > 0: return true
 	if target == EDIT:
-		menu._activate(menu.CLOUD_ACCOUNTS)
+		menu.account_panel.open("cloud", true)
 	elif target == REMOVE:
 		mode = "remove"
 		removing = {}

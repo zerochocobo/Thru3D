@@ -78,6 +78,7 @@ func _run() -> void:
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("settings-flat.png"))
 	for detail in ["screen_distance", "subtitle_distance", "color_grade"]:
+		state.geometry = 1 if detail == "subtitle_distance" else 0
 		menu._adjustment = detail
 		for page in (3 if detail == "color_grade" else 1):
 			menu._grade_page = page
@@ -155,11 +156,25 @@ func _run() -> void:
 	if menu._buttons.filter(func(b): return b.target == menu.VOLUME).size() != 1:
 		failures.append("Sound icon raises the volume slider")
 	menu._volume_open = false
+	# Match Main's below-eye transport pose; the enlarged subtitle popup extends above the bar.
+	menu.transform = Transform3D(Basis(Vector3.RIGHT, -atan2(0.45, 1.4)), Vector3(0, -0.45, -1.4))
+	camera.fov = 60
 	menu._activate(110)
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("subtitles-selected.png"))
 	if menu._subtitle_ids.values() != [0, 1, 3, 8]: failures.append("Subtitle picker must show Off and real IDs")
+	if menu._buttons.filter(func(button): return button.target >= Menu.SUBTITLE_POSITION and button.target < Menu.SUBTITLE_POSITION + 5).size() != 5:
+		failures.append("VR subtitle popup must show five position controls")
+	for target in menu.choices.targets:
+		if menu.choices.targets[target].get("kind") == "open" and menu.choices.targets[target].get("key") == "subtitle_distance":
+			menu.choices.action(target)
+			break
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("subtitles-distance-popup.png"))
+	menu.choices.reset()
+	menu.refresh()
 	state.subtitle_track = 0
 	menu.refresh_values()
 	await RenderingServer.frame_post_draw

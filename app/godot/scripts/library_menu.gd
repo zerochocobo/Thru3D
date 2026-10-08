@@ -18,8 +18,13 @@ const PlatformMethods := preload("res://scripts/platform_methods.gd")
 var server_browser: RefCounted = ServerBrowser.new(self)
 const CloudAccountActions := preload("res://scripts/cloud_account_actions.gd")
 var cloud_accounts: RefCounted = CloudAccountActions.new(self)
+const AccountPanel := preload("res://scripts/account_panel.gd")
+var account_panel: RefCounted = AccountPanel.new(self)
 const Quality := preload("res://scripts/display_quality.gd")
-const SETTING_TABS := ["Video", "Subtitles", "Background", "About", "Display", "General"]
+const SeekPolicy := preload("res://scripts/seek_policy.gd")
+const ChoiceFields := preload("res://scripts/choice_fields.gd")
+var choices := ChoiceFields.new(self)
+const SETTING_TABS := ["Video", "VR subtitles", "Background", "About", "Display", "General"]
 const GENERAL_TAB := 5
 const SETTING_ORDER := [GENERAL_TAB, DISPLAY_TAB, 0, 1, 2, 3]
 const DISPLAY_TAB := 4
@@ -30,7 +35,8 @@ const ABOUT_TAB := 3
 const ABOUT_HOME := 36
 var _about_page := 0 # app, credits
 ## VR subtitle distances (metres); the text keeps its angular size at any distance.
-const SUBTITLE_DISTANCES := [5.0, 7.5, 10.0, 15.0, 20.0]
+const SUBTITLE_DISTANCES := preload("res://scripts/subtitle_depth.gd").CHOICES
+const SubtitleDepth := preload("res://scripts/subtitle_depth.gd")
 const OUTPUT_WIDTHS := [0, 5760, 4096]
 const OUTPUT_NAMES := ["Original resolution", "6K", "4K"]
 ## Language rows in About: each language named in itself.
@@ -146,12 +152,15 @@ var _side: Node3D                  # navigation column, angled towards the viewe
 var _covers := {}                  # DLNA cover URL -> HTTPRequest while it downloads
 
 func dismiss() -> void:
+	choices.reset()
+	account_panel.close()
 	server_browser.cancel()
 	_cancel_cloud()
 	super()
 
 func _ready() -> void:
 	super()
+	choices.changed.connect(func(key, value): setting_changed.emit(key, value))
 	_side = Node3D.new()
 	_side.transform = Transform3D(Basis(Vector3.UP, deg_to_rad(24)), Vector3(-0.84, 0, 0.1))
 	add_child(_side)
@@ -166,6 +175,9 @@ func attach_platform(value: Object) -> void:
 		platform.connect("android_lifecycle", _on_android_lifecycle)
 
 func _on_android_lifecycle(state: String) -> void:
+	if account_panel.active():
+		account_panel.lifecycle(state)
+		return
 	if state == "resume" and server_browser.setup:
 		server_browser.setup = false
 		if section == Section.MEDIA_SERVER:
@@ -175,6 +187,7 @@ func _on_android_lifecycle(state: String) -> void:
 		cloud_accounts.changed()
 
 func _reset_navigation() -> void:
+	choices.reset()
 	_recent_page = 0
 	_drag = {}
 	_fling = 0.0
@@ -204,6 +217,14 @@ func _in_list(point: Vector3) -> bool:
 		and point.y < span.x + 0.01 and point.y > span.x - span.y - 0.02
 
 func press_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> bool:
+	if section == Section.SETTINGS and choices.press(hand, origin, direction, tracked):
+		_fling = 0.0; return true
+	if account_panel.view == "web":
+		if not account_panel.web_hand.is_empty(): return true
+		var web_hit := ray_hit(origin, direction) if tracked else {}
+		if int(web_hit.get("target", NONE)) in [AccountPanel.WEB, AccountPanel.WEB_SCROLL]:
+			account_panel.web_press(hand, web_hit.point, int(web_hit.target) == AccountPanel.WEB_SCROLL)
+			return true
 	if not _drag.is_empty() and _drag.hand != hand: return true
 	update_pointer(hand, origin, direction, tracked)
 	var hit := ray_hit(origin, direction) if tracked else {}
@@ -229,6 +250,8 @@ func press_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: b
 	return true
 
 func cancel_pointer(hand: String) -> void:
+	choices.cancel(hand)
+	if account_panel.web_hand == hand: account_panel.web_cancel()
 	if not _drag.is_empty() and _drag.hand == hand:
 		_drag = {}
 		_fling = 0.0
@@ -236,6 +259,12 @@ func cancel_pointer(hand: String) -> void:
 
 func update_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> void:
 	super(hand, origin, direction, tracked)
+	choices.update(hand, origin, direction, tracked)
+	if account_panel.web_hand == hand:
+		var point: Variant = _plane_point(origin, direction) if tracked else null
+		if point == null: account_panel.web_cancel()
+		else: account_panel.web_move(hand, point)
+		return
 	if not tracked and not _drag.is_empty() and _drag.hand == hand:
 		_drag = {}
 		_fling = 0.0
@@ -261,6 +290,11 @@ func update_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: 
 		_drag.at_us = now
 
 func release_pointer(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> void:
+	if choices.capture.get("hand", "") == hand:
+		choices.release(hand, origin, direction, tracked); return
+	if account_panel.web_hand == hand:
+		account_panel.web_release(hand, _plane_point(origin, direction) if tracked else null)
+		return
 	if _drag.is_empty() or _drag.hand != hand:
 		return
 	var drag := _drag
@@ -278,6 +312,11 @@ func release_pointer(hand: String, origin: Vector3, direction: Vector3, tracked:
 
 ## Thumbstick y (up positive) scrolls the list; it never selects.
 func stick_scroll(y: float, delta: float) -> void:
+	if section == Section.SETTINGS and choices.stick_scroll(y, delta): return
+	if account_panel.view == "web":
+		if visible and account_panel.web_hand.is_empty() and is_finite(y) and absf(y) >= STICK_DEADZONE:
+			account_panel.web_action("scroll", Vector2(0, -y * delta * 6.0))
+		return
 	if not visible or not _drag.is_empty() or not _editor.is_empty() or not is_finite(y) or absf(y) < STICK_DEADZONE:
 		return
 	_stick_ms = Time.get_ticks_msec()
@@ -286,7 +325,8 @@ func stick_scroll(y: float, delta: float) -> void:
 	_set_scroll(scroll - signf(y) * amount * _lines() * STICK_SPEED * delta)
 
 func _process(delta: float) -> void:
-	if not visible or not _drag.is_empty() or Time.get_ticks_msec() - _stick_ms < 120:
+	if visible: account_panel.tick(delta)
+	if not visible or not _drag.is_empty() or not choices.capture.is_empty() or Time.get_ticks_msec() - _stick_ms < 120:
 		return
 	if absf(_fling) > 0.4:
 		var before := scroll
@@ -339,6 +379,7 @@ func _place_list() -> void:
 		_bar_thumb.position.y = span.x - travel - thumb * 0.5
 
 func _grid() -> bool:
+	if account_panel.active(): return false
 	if section == Section.CLOUD and not cloud_accounts.mode.is_empty(): return false
 	if section == Section.MEDIA_SERVER: return server_browser.grid()
 	return section != Section.SETTINGS
@@ -473,6 +514,10 @@ func _load_section() -> void:
 
 func _rebuild_rows() -> void:
 	rows.clear()
+	if account_panel.active():
+		rows.assign(account_panel.rows())
+		scroll = clampf(scroll, 0.0, _max_scroll())
+		return
 	match section:
 		Section.RECENT:
 			for entry in (catalog.list_recent() if catalog else []):
@@ -508,55 +553,61 @@ func _rebuild_rows() -> void:
 		Section.SETTINGS:
 			var settings: Dictionary = settings_provider.call() if settings_provider.is_valid() else {}
 			if tab == VIDEO_TAB:
-				for i in OUTPUT_WIDTHS.size():
-					var selected: bool = int(settings.get("output_width", 0)) == int(OUTPUT_WIDTHS[i])
-					rows.append({"title": I18n.t(OUTPUT_NAMES[i]), "detail": "", "icon": "check" if selected else "circle",
-						"selected": selected, "setting": ["output_width", OUTPUT_WIDTHS[i]]})
+				var seek: String = SeekPolicy.normalize(settings.get("seek_mode", SeekPolicy.SPEED))
+				rows.append(_choice_row("Video time positioning", "seek_mode", seek,
+					[{"value": SeekPolicy.SPEED, "label": "Speed", "hint": "Faster jumps, less precise"},
+					{"value": SeekPolicy.EXACT, "label": "Precise", "hint": "Accurate jumps, may take longer"}], false,
+					"Faster jumps, less precise" if seek == SeekPolicy.SPEED else "Accurate jumps, may take longer"))
+				rows.append(_choice_row("Resolution", "output_width", int(settings.get("output_width", 0)),
+					[{"value": 0, "label": "Original size"}, {"value": 5760, "label": "6K"}, {"value": 4096, "label": "4K"}], true))
 			elif tab == GENERAL_TAB:
-				for value in I18n.CHOICES:
-					var current: bool = I18n.choice == value
-					rows.append({"title": I18n.t("Language") + " · " + I18n.t(LANGUAGE_NAMES[value]), "detail": "",
-						"icon": "check" if current else "circle", "selected": current, "setting": ["language", value]})
-				# Library pictures: frames of played videos and DLNA covers.
+				var languages: Array = []
+				for value in I18n.CHOICES: languages.append({"value": value, "label": LANGUAGE_NAMES[value]})
+				rows.append(_choice_row("Language", "language", I18n.choice, languages))
+				rows.append(_choice_row("Save play history", "history", settings.get("history", true),
+					[{"value": true, "label": "On"}, {"value": false, "label": "Off"}]))
+				# Library thumbnails plus Android photo/depth/SBS files.
 				if _cache_usage == null:
-					_cache_usage = Thumbnails.usage() # opens every picture file: not on each redraw
+					_cache_usage = _read_cache_usage() # scan once, not on each redraw
 				var cache: Vector2i = _cache_usage
 				var armed := _confirm == "clear_cache"
 				rows.append({"title": I18n.t("Clear cache"), "detail": _bytes(cache.y) if cache.x > 0 else "", "icon": "check" if armed else "trash",
 					"selected": armed, "clear_cache": true, "empty": cache.x == 0})
-				var history: bool = settings.get("history", true)
-				rows.append({"title": I18n.t("Save play history"), "detail": "", "icon": "check" if history else "circle",
-					"selected": history, "setting": ["history", not history]})
 			elif tab == DISPLAY_TAB:
+				var quality_choices: Array = []
 				for i in Quality.SCALES.size():
-					var selected := int(settings.get("display_quality", Quality.DEFAULT)) == i
-					var pending := selected and bool(settings.get("display_quality_pending", false))
-					rows.append({"title": I18n.t("Display quality") + " · " + I18n.t(Quality.NAMES[i]),
-						"detail": I18n.t("Restart to apply") if pending else "", "icon": "check" if selected else "circle", "selected": selected, "setting": ["display_quality", i]})
+					quality_choices.append({"value": i, "label": Quality.NAMES[i]})
+				rows.append(_choice_row("Display quality", "display_quality", int(settings.get("display_quality", Quality.DEFAULT)),
+					quality_choices, false, "Restart to apply" if settings.get("display_quality_pending", false) else ""))
+				var sharpness_choices: Array = []
 				for i in Quality.SHARPNESS.size():
-					var selected := is_equal_approx(float(settings.get("sharpness", Quality.DEFAULT_SHARPNESS)), Quality.SHARPNESS[i])
-					rows.append({"title": I18n.t("Sharpness") + " · " + I18n.t(Quality.SHARPNESS_NAMES[i]),
-						"detail": "", "icon": "check" if selected else "circle", "selected": selected, "setting": ["sharpness", Quality.SHARPNESS[i]]})
+					sharpness_choices.append({"value": Quality.SHARPNESS[i], "label": Quality.SHARPNESS_NAMES[i]})
+				rows.append(_choice_row("Sharpness", "sharpness", float(settings.get("sharpness", Quality.DEFAULT_SHARPNESS)), sharpness_choices, true))
 			elif tab == SUBTITLES_TAB:
-				var distance := float(settings.get("subtitle_distance", 5.0))
-				for value in SUBTITLE_DISTANCES:
-					var current := is_equal_approx(distance, value)
-					rows.append({"title": "%s  %s m" % [I18n.t("Distance"), str(value).trim_suffix(".0")], "detail": "",
-						"icon": "check" if current else "circle", "selected": current, "setting": ["subtitle_distance", value]})
+				rows.append(_choice_row("Distance", "subtitle_distance", float(settings.get("subtitle_distance", 5.0)), SubtitleDepth.distance_choices()))
+				rows.append(_choice_row("Subtitle position", "subtitle_position", int(settings.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION)), SubtitleDepth.position_choices()))
 			elif tab == BACKGROUND_TAB:
 				var selected := str(settings.get("background", "belfast"))
+				var backgrounds: Array = []
 				for option in [["belfast", "Belfast sunset", "image"], ["dark", "Dark background", "circle"], ["passthrough", "Passthrough", "eyes"]]:
-					rows.append({"title": I18n.t(option[1]), "detail": "", "icon": "check" if selected == option[0] else option[2],
-						"selected": selected == option[0], "setting": ["background", option[0]]})
+					backgrounds.append({"value": option[0], "label": option[1]})
 				if settings.get("background_custom", false):
-					rows.append({"title": I18n.t("Custom panorama"), "detail": str(settings.get("background_title", "")), "icon": "check" if selected == "custom" else "image",
-						"selected": selected == "custom", "setting": ["background", "custom"]})
+					backgrounds.append({"value": "custom", "label": "Custom panorama"})
+				rows.append(_choice_row("Background", "background", selected, backgrounds))
 				if selected in ["belfast", "custom"]:
-					rows.append({"title": I18n.t("Direction"), "detail": "%d°" % int(settings.get("background_yaw", 0)), "icon": "recenter", "setting": ["background_yaw", true]})
-					rows.append({"title": I18n.t("Brightness"), "detail": "%d%%" % int(float(settings.get("background_brightness", 1)) * 100), "icon": "image", "setting": ["background_brightness", true]})
+					var directions: Array = []
+					for angle in range(0, 360, 45): directions.append({"value": angle, "label": str(angle) + "°"})
+					rows.append(_choice_row("Direction", "background_yaw", int(settings.get("background_yaw", 0)), directions))
+					rows.append(_choice_row("Brightness", "background_brightness", float(settings.get("background_brightness", 1.0)),
+						[{"value": 0.5, "label": "50%"}, {"value": 0.75, "label": "75%"}, {"value": 1.0, "label": "100%"}, {"value": 1.25, "label": "125%"}], true))
 				status = "Loading…" if settings.get("background_loading", false) else str(settings.get("background_error", ""))
 			elif tab == ABOUT_TAB:
-				if _about_page == 2:
+				if _about_page == 3:
+					var licenses: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://i18n/licenses.json"))
+					if licenses is Array:
+						for license in licenses:
+							rows.append({"title": str(license.name), "detail": str(license.license), "icon": "info", "license_id": str(license.id)})
+				elif _about_page == 2:
 					for credit in [
 						["Belfast Sunset (Pure Sky)", "Poly Haven · CC0 1.0 · Dimitrios Savva / Greg Zaal / Jarod Guest"],
 						["Godot", "MIT"], ["Godot OpenXR Vendors", "Vendor license notices"],
@@ -571,6 +622,7 @@ func _rebuild_rows() -> void:
 					rows.append(_about_info(I18n.t("Official website"), "https://wapok.com"))
 					rows.append(_about_info(I18n.t("Source code"), "https://github.com/zerochocobo/Thru3D"))
 					rows.append({"title": I18n.t("Credits"), "icon": "info", "about_page": 2})
+					rows.append({"title": I18n.t("Open source licenses"), "icon": "info", "open_licenses": true})
 		Section.CLOUD:
 			if not cloud_accounts.mode.is_empty(): rows = cloud_accounts.rows()
 			else:
@@ -689,11 +741,21 @@ static func _size(entry: Dictionary) -> String:
 
 ## Cold Alpha profile awaiting its confirming second press.
 var _confirm := ""
-var _cache_usage: Variant = null   # thumbnail files and bytes, read when the Video tab is opened
+var _cache_usage: Variant = null   # thumbnail and photo files/bytes, read on opening settings
+
+func _read_cache_usage() -> Vector2i:
+	var usage := Thumbnails.usage()
+	if PlatformMethods.supports(platform, "photo_cache_usage"):
+		var photo_usage: Variant = JSON.parse_string(str(platform.photo_cache_usage()))
+		if photo_usage is Dictionary:
+			usage += Vector2i(maxi(0, int(photo_usage.get("files", 0))), maxi(0, int(photo_usage.get("bytes", 0))))
+	return usage
 
 ## Video state changes arrive several times a second: redraw only when the Alpha profiles
 ## (current, compiling, cold) shown on the Alpha tab change.
 func _activate(target: int) -> void:
+	if choices.action(target): return
+	if account_panel.action(target): return
 	if section == Section.CLOUD and cloud_accounts.action(target): return
 	if section == Section.MEDIA_SERVER and server_browser.action(target): return
 	if not _row_target(target) and target != CLEAR_HISTORY:
@@ -710,6 +772,7 @@ func _activate(target: int) -> void:
 	elif target == QUIT_APP:
 		setting_changed.emit("quit_app", true)
 	elif target >= NAV_BASE and target < NAV_BASE + NAV.size():
+		account_panel.close()
 		cloud_accounts.reset()
 		server_browser.cancel()
 		_cancel_cloud()
@@ -747,8 +810,7 @@ func _activate(target: int) -> void:
 		_open_editor({})
 	elif target == CLOUD_ACCOUNTS and platform:
 		_cancel_cloud()
-		_cloud_setup = true
-		platform.media_cloud_accounts()
+		account_panel.open("cloud")
 	elif target == EDIT:
 		var current: Array = _smb_servers.filter(func(s): return str(s.id) == _smb_server)
 		_open_editor(current[0] if current.size() > 0 else {})
@@ -781,6 +843,18 @@ func _activate(target: int) -> void:
 		_editor_input(target)
 
 func _choose(row: Dictionary) -> void:
+	if account_panel.choose(row): return
+	if row.has("open_licenses"):
+		_open_licenses()
+		return
+	if row.has("license_id"):
+		var id := str(row.license_id)
+		var text := ""
+		if id == "godot": text = Engine.get_license_text()
+		elif id == "godot-third-party": text = _engine_notices()
+		else: text = str(platform.license_text(id)) if PlatformMethods.supports(platform, "license_text") else _desktop_license_text(id)
+		account_panel.show_license(str(row.title), text if not text.is_empty() else I18n.t("License unavailable"))
+		return
 	if section == Section.CLOUD and cloud_accounts.choose(row): return
 	if row.has("about_page"):
 		_about_page = int(row.about_page)
@@ -839,6 +913,7 @@ func _choose(row: Dictionary) -> void:
 		_confirm = ""
 		_cancel_covers()
 		Thumbnails.clear()
+		if PlatformMethods.supports(platform, "clear_photo_cache"): platform.clear_photo_cache()
 		_cache_usage = null
 		refresh()
 	elif row.has("setting"):
@@ -1008,6 +1083,8 @@ func _editor_input(target: int) -> void:
 
 func _draw() -> void:
 	_clear_layout()
+	if account_panel.view == "web":
+		account_panel.draw(); return
 	# Like common VR players: a navigation column angled towards the viewer, the browser beside
 	# it, and round actions floating under the browser.
 	_set_backdrop(Vector2(1.46, 1.12), Vector2(0.13, 0))
@@ -1021,6 +1098,9 @@ func _draw() -> void:
 	_round(PLAYER, "play", Vector2(0.13, -0.65), 0.08, true, false, I18n.t("Player"))
 	_round(CLOSE, "close", Vector2(0.25, -0.65), 0.08, true, false, I18n.t("Close"))
 	_place_device_status(Vector2(0.13, -0.735))
+	if account_panel.active():
+		account_panel.draw()
+		return
 	if not _editor.is_empty():
 		_draw_editor()
 		return
@@ -1036,7 +1116,7 @@ func _draw() -> void:
 		var tabs: Array = SETTING_TABS if section == Section.SETTINGS else []
 		if section == Section.SETTINGS and tab == ABOUT_TAB and _about_page != 0:
 			tabs = []
-			_label(I18n.t("Credits"), Vector3(0.13, 0.46, 0.004), 24)
+			_label(I18n.t("Open source licenses" if _about_page == 3 else "Credits"), Vector3(0.13, 0.46, 0.004), 24)
 		for position in tabs.size():
 			var i: int = SETTING_ORDER[position]
 			_button(TAB_BASE + i, I18n.t(tabs[i]), Vector2(-0.40 + position * 0.225, 0.46), Vector2(0.21, 0.07))
@@ -1133,6 +1213,7 @@ func _header_title() -> String:
 	return ""
 
 func _draw_rows() -> void:
+	choices.begin(str([section, tab]))
 	_list = Node3D.new()
 	add_child(_list)
 	_decorations.append(_list)
@@ -1144,6 +1225,9 @@ func _draw_rows() -> void:
 		if _grid():
 			_tile(ROW_BASE + k, row, Vector2(-0.36 + (k % COLS) * GRID_PITCH.x, GRID_TOP - TILE_SIZE.y * 0.5 - (k / COLS) * GRID_PITCH.y))
 		else:
+			if row.has("choices"):
+				_setting_field(row, Vector2(0.17, LIST_TOP - k * ROW_PITCH))
+				continue
 			_row_button(ROW_BASE + k, str(row.title), "" if row.get("about_info", false) else str(row.get("detail", "")), str(row.get("icon", "video")),
 				Vector2(0.17, LIST_TOP - k * ROW_PITCH), bool(row.get("selected", false)))
 			if bool(row.get("about_info", false)):
@@ -1157,6 +1241,13 @@ func _draw_rows() -> void:
 				var detail := _label(_fit_title(str(row.detail), "", 1.08, 17), Vector3(-0.48, -0.024, 0.004), 17, node)
 				detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 				detail.modulate = MUTED
+				if account_panel.view == "license":
+					_buttons.back().base_color = Color(0, 0, 0, 0)
+					node.material_override.set_shader_parameter("surface_color", Color(0, 0, 0, 0))
+					node.get_child(1).visible = false
+					title.position.x = -0.58; detail.position.x = -0.58
+					title.font_size = 19; detail.font_size = 19; detail.modulate = Color.WHITE
+					title.text = str(row.title); detail.text = str(row.detail)
 	if _max_scroll() > 0:
 		# Scrollbar: the thumb shows position and length; pointing at the track jumps there.
 		var top := _bar_span().x
@@ -1169,6 +1260,24 @@ func _draw_rows() -> void:
 		var empty := _label("—", Vector3(0.19, 0.0, 0.004), 30)
 		empty.modulate = MUTED
 	_place_list()
+	choices.finish()
+
+func _setting_field(row: Dictionary, centre: Vector2) -> void:
+	_row_button(ROW_BASE, str(row.title), "", "", centre, false)
+	var button: Dictionary = _buttons.back()
+	button.enabled = false
+	var node: MeshInstance3D = button.node
+	if node.get_child_count() > 1: node.get_child(1).visible = false
+	var title: Label3D = node.get_child(0)
+	title.position = Vector3(-0.55, 0.014 if not str(row.get("hint", "")).is_empty() else 0, 0.004)
+	title.font_size = 18; title.text = _fit_title(str(row.title), "", 0.43, 18)
+	if not str(row.get("hint", "")).is_empty():
+		var hint := _label(_fit_title(I18n.t(row.hint), "", 0.43, 13), Vector3(-0.55, -0.022, 0.004), 13, node)
+		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT; hint.modulate = MUTED
+	choices.field(node, row, Vector2(0.225, 0), 0.72)
+
+func _choice_row(title: String, key: String, value: Variant, options: Array, compact: bool = false, hint: String = "") -> Dictionary:
+	return {"title": I18n.t(title), "key": key, "value": value, "choices": options, "compact": compact, "hint": hint}
 
 ## A folder, video or server as a tile: a large glyph (videos keep a dark picture area with the
 ## length or size in the corner), the name in up to two lines below.
@@ -1305,6 +1414,34 @@ func _draw_about() -> void:
 
 func _about_info(title: String, detail: String) -> Dictionary:
 	return {"title": title, "detail": detail, "icon": "info", "about_info": true}
+
+func _open_licenses() -> void:
+	_about_page = 3
+	scroll = 0.0
+	refresh()
+
+func _desktop_license_text(id: String) -> String:
+	var index: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://i18n/licenses.json"))
+	if not index is Array: return ""
+	for item in index:
+		if item.id == id:
+			var text := ""
+			for asset in item.get("assets", []):
+				var path := ProjectSettings.globalize_path("res://../../third_party/" + str(asset))
+				if FileAccess.file_exists(path): text += FileAccess.get_file_as_string(path) + "\n\n"
+			return text
+	return ""
+
+func _engine_notices() -> String:
+	var text := ""
+	for component in Engine.get_copyright_info():
+		text += str(component.get("name", "")) + "\n"
+		for part in component.get("parts", []):
+			text += "\n".join(part.get("copyright", [])) + "\n" + str(part.get("license", "")) + "\n\n"
+	var licenses := Engine.get_license_info()
+	for name in licenses:
+		text += str(name) + "\n\n" + str(licenses[name]) + "\n\n"
+	return text
 
 func _draw_editor() -> void:
 	var title := _label("SMB", Vector3(-0.42, 0.46, 0.004), 24)

@@ -101,8 +101,13 @@ struct Source final {
     const EGLContext owner_context = eglGetCurrentContext();
     const std::thread::id owner_thread = std::this_thread::get_id();
     const std::string path;
-    const bool hardware, audio;
+    const bool hardware, audio, exact_start;
     const int start_ms;
+    const std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+    std::atomic<int64_t> initialized_us{-1}, renderer_ready_us{-1}, load_submitted_us{-1}, file_loaded_us{-1}, first_published_us{-1};
+    int64_t startup_us() const {
+        return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - created_at).count();
+    }
     // Extra audio tracks beside the video (location, title), e.g. a clone-voice M4A. Added unselected
     // once the file loads; a track that fails to open is logged and skipped.
     const std::vector<std::pair<std::string, std::string>> audio_files;
@@ -152,6 +157,8 @@ struct Source final {
     std::atomic<uint64_t> debug_steps_applied{0}, debug_step_images{0};
 #endif
     int64_t pending_seek_ms = -1;
+    bool pending_seek_exact = true; // commands_mutex; coalesced with the target
+    std::atomic<bool> last_seek_exact{true};
     std::vector<int64_t> audio_track_ids; // commands_mutex; from actual MPV track-list
     int desired_audio_id = -1; double desired_volume = 100; bool desired_mute = false, audio_dirty = false;
     uint64_t snapshot_sequence = 0; // control thread only
@@ -160,9 +167,9 @@ struct Source final {
 
     Source(std::string file, bool hw, bool with_audio, int position,
            std::vector<std::pair<std::string, std::string>> extra_audio = {},
-           std::vector<std::pair<std::string, std::string>> extra_subtitles = {})
-        : path(std::move(file)), hardware(hw), audio(with_audio), start_ms(position),
-          audio_files(std::move(extra_audio)), subtitle_files(std::move(extra_subtitles)) {
+           std::vector<std::pair<std::string, std::string>> extra_subtitles = {}, bool precise_start = true)
+        : path(std::move(file)), hardware(hw), audio(with_audio), exact_start(precise_start), start_ms(position),
+          audio_files(std::move(extra_audio)), subtitle_files(std::move(extra_subtitles)), last_seek_exact(precise_start) {
         require(display != EGL_NO_DISPLAY && owner_context != EGL_NO_CONTEXT,
                 "MPV source must start in the Godot GLES owner context");
     }
@@ -281,6 +288,9 @@ struct Source final {
             option("config", "no"); option("load-scripts", "no"); option("terminal", "no");
             option("vo", "libmpv"); option("hwdec", hardware ? "mediacodec" : "no"); option("hwdec-codecs", "all");
             option("audio", audio ? "auto" : "no"); option("pause", "yes"); option("idle", "yes"); option("keep-open", "yes");
+            // Initial/continued playback must use the same policy as subsequent seeks.
+            // Explicit seek flags below still allow an independent bookmark override.
+            option("hr-seek", exact_start ? "yes" : "no");
             if (audio) { option("ao", "aaudio"); option("aaudio-performance-mode", "low-latency"); }
             // Network sources: a deep read-ahead absorbs Wi-Fi jitter for 8K bitrates.
             option("cache", "auto"); option("demuxer-max-bytes", "256MiB"); option("demuxer-readahead-secs", "20");
@@ -317,22 +327,25 @@ struct Source final {
 #endif
             checked(mpv_request_log_messages(core, "debug"), "MPV source log subscription");
             checked(mpv_initialize(core), "MPV source initialize");
+            initialized_us.store(startup_us());
             checked(mpv_observe_property(core, 41, "sub-text", MPV_FORMAT_STRING), "MPV subtitle text observation");
             render_thread = std::thread([this, core] { render(core); });
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
             while (!render_ready.load() && !render_failed.load() && !closing.load() && std::chrono::steady_clock::now() < deadline)
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             require(render_ready.load() && !render_failed.load(), "MPV shared renderer failed to initialize");
+            renderer_ready_us.store(startup_us());
             if (!closing.load()) {
                 const std::string start = "start=" + std::to_string(start_ms / 1000.0);
                 const char* load[] = {"loadfile", path.c_str(), "replace", "-1", start.c_str(), nullptr};
                 checked(mpv_command(core, load), "MPV source loadfile");
+                load_submitted_us.store(startup_us());
             }
             bool loaded = false;
             auto format_deadline = std::chrono::steady_clock::time_point::max();
             auto next_snapshot = std::chrono::steady_clock::now();
             while (!closing.load() && !render_failed.load()) {
-                bool set_play = false, play = false, set_audio = false, muted = false, set_subtitle = false;
+                bool set_play = false, play = false, set_audio = false, muted = false, set_subtitle = false, seek_exact = true;
 #ifndef NDEBUG
                 bool set_step = false;
 #endif
@@ -345,7 +358,7 @@ struct Source final {
 #ifndef NDEBUG
                         set_step = debug_step_pending; debug_step_pending = false;
 #endif
-                        seek = pending_seek_ms; pending_seek_ms = -1;
+                        seek = pending_seek_ms; seek_exact = pending_seek_exact; pending_seek_ms = -1;
                         set_audio = audio_dirty; audio_dirty = false;
                         audio_id = desired_audio_id; volume = desired_volume; muted = desired_mute;
                         set_subtitle = subtitle_dirty; subtitle_dirty = false;
@@ -379,12 +392,13 @@ struct Source final {
                     if (closing.load()) break;
                     require(!render_in_progress.load() && !render_failed.load(), "MPV seek renderer did not quiesce");
                     awaiting_seek_event = true; core_eof.store(false);
-                    __android_log_print(ANDROID_LOG_INFO, "QuestMpvSource", "Seek request %lld ms; epoch=%llu floor=%llu",
+                    __android_log_print(ANDROID_LOG_INFO, "QuestMpvSource", "Seek request %lld ms; epoch=%llu floor=%llu mode=%s",
                         static_cast<long long>(seek), static_cast<unsigned long long>(last_epoch.load()),
-                        static_cast<unsigned long long>(epoch_floor.load()));
+                        static_cast<unsigned long long>(epoch_floor.load()), seek_exact ? "exact" : "speed");
                     seeks_started.fetch_add(1);
+                    last_seek_exact.store(seek_exact);
                     const auto seconds = std::to_string(seek / 1000.0);
-                    const char* command[] = {"seek", seconds.c_str(), "absolute+exact", nullptr};
+                    const char* command[] = {"seek", seconds.c_str(), seek_exact ? "absolute+exact" : "absolute+keyframes", nullptr};
                     checked(mpv_command(core, command), "MPV source seek");
                     seeks_completed.fetch_add(1);
                 }
@@ -423,6 +437,7 @@ struct Source final {
                         __android_log_print(added < 0 ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, "QuestMpvSource",
                             "Extra subtitle track '%s': %s", title.c_str(), mpv_error_string(added));
                     }
+                    file_loaded_us.store(startup_us());
                     loaded = true; set_state("ready");
                     format_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
                 }
@@ -671,6 +686,7 @@ struct Source final {
                 require(target->fence != nullptr && glGetError() == GL_NO_ERROR, "MPV producer completion fence failed");
                 glFlush(); target->ticket = ticket; target->token = ++token_sequence; target->allow_repeat = forced;
                 target->phase = Phase::ready; published.fetch_add(1);
+                int64_t unset = -1; first_published_us.compare_exchange_strong(unset, startup_us());
             }
         } catch (const std::exception& failure) {
             { std::lock_guard<std::mutex> lock(frames_mutex); render_error = failure.what(); }
@@ -799,6 +815,10 @@ struct Source final {
             ",\"released\":" + std::to_string(released.load()) + ",\"held_slots\":" + std::to_string(held) +
             ",\"last_source_epoch\":" + std::to_string(last_epoch.load()) + ",\"epoch_floor\":" + std::to_string(epoch_floor.load()) +
             ",\"seeks_started\":" + std::to_string(seeks_started.load()) + ",\"seeks_completed\":" + std::to_string(seeks_completed.load()) +
+            ",\"seek_mode\":" + quote(last_seek_exact.load() ? "exact" : "speed") +
+            ",\"startup_native\":{\"scope\":\"elapsed_us_since_source_creation\",\"initialized_us\":" + std::to_string(initialized_us.load()) +
+            ",\"renderer_ready_us\":" + std::to_string(renderer_ready_us.load()) + ",\"load_submitted_us\":" + std::to_string(load_submitted_us.load()) +
+            ",\"file_loaded_us\":" + std::to_string(file_loaded_us.load()) + ",\"first_published_us\":" + std::to_string(first_published_us.load()) + "}" +
             ",\"invalid_frames\":" + std::to_string(invalid_frames.load()) +
             ",\"stale_seek_frames_discarded\":" + std::to_string(stale_seek_frames_discarded.load()) +
             ",\"audio_commands_applied\":" + std::to_string(audio_commands_applied.load()) +
@@ -832,7 +852,7 @@ Java_org_vrpassthroughplayer_plugin_MpvSourceNative_available(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_vrpassthroughplayer_plugin_MpvSourceNative_create(JNIEnv* env, jclass, jobject context, jstring path, jint start,
                                                          jboolean hardware, jboolean audio, jint max_width, jobjectArray audio_files,
-                                                         jobjectArray subtitle_files) {
+                                                         jobjectArray subtitle_files, jboolean exact_start) {
     try {
         require(extension_available(), "MPV source requires the verified private source-frame build");
         require(path && start >= 0, "Invalid MPV local source request");
@@ -869,7 +889,7 @@ Java_org_vrpassthroughplayer_plugin_MpvSourceNative_create(JNIEnv* env, jclass, 
             return extra;
         };
         auto source = std::make_shared<Source>(file, hardware == JNI_TRUE, audio == JNI_TRUE, start,
-            read_tracks(audio_files), read_tracks(subtitle_files));
+            read_tracks(audio_files), read_tracks(subtitle_files), exact_start == JNI_TRUE);
         source->max_output_width.store(max_width); // before any render; fixed for this source
         std::lock_guard<std::mutex> lock(registry_mutex);
         require(registry.size() < 2 && next_handle < std::numeric_limits<jlong>::max(), "MPV source capacity exhausted");
@@ -944,13 +964,15 @@ Java_org_vrpassthroughplayer_plugin_MpvSourceNative_subtitleStatus(JNIEnv* env, 
     } catch (const std::exception& failure) { error(env, failure); return nullptr; }
 }
 extern "C" JNIEXPORT jboolean JNICALL
-Java_org_vrpassthroughplayer_plugin_MpvSourceNative_seek(JNIEnv* env, jclass, jlong handle, jlong position) {
+Java_org_vrpassthroughplayer_plugin_MpvSourceNative_seek(JNIEnv* env, jclass, jlong handle, jlong position, jboolean exact) {
     try {
         require(position >= 0 && position <= std::numeric_limits<int32_t>::max(), "MPV seek position out of range");
         auto source = find(handle); std::lock_guard<std::mutex> lock(source->commands_mutex);
         const auto epoch = source->last_epoch.load();
         if (source->closing.load() || epoch == 0 || source->epoch_floor.load() > epoch) return JNI_FALSE;
-        source->epoch_floor.store(epoch+1); source->core_eof.store(false); source->pending_seek_ms = position; return JNI_TRUE;
+        source->epoch_floor.store(epoch+1); source->core_eof.store(false);
+        source->pending_seek_ms = position; source->pending_seek_exact = exact == JNI_TRUE;
+        source->wake.notify_one(); return JNI_TRUE;
     } catch (const std::exception& failure) { error(env, failure); return JNI_FALSE; }
 }
 extern "C" JNIEXPORT jstring JNICALL

@@ -14,7 +14,7 @@ class Host extends RefCounted:
 	var targets: Array = []
 	func close_mpv_video(_id: int) -> void: pass
 	func set_mpv_playing(_id: int, _playing: bool) -> void: pass
-	func revise_mpv_video(id: int, _stereo: bool, _alpha: bool, _profile: String, time: int, _depth: bool, _top_bottom: bool) -> int:
+	func revise_mpv_video(id: int, _stereo: bool, _alpha: bool, _profile: String, time: int, _depth: bool, _top_bottom: bool, _exact: bool = false) -> int:
 		targets.append([id, time]); return 0
 
 func check(ok: bool, text: String) -> void:

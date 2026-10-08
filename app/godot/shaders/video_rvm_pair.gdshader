@@ -19,6 +19,7 @@ uniform float depth_convergence = 0.35;
 uniform bool packed_alpha = false;
 #include "res://shaders/video_coordinates.gdshaderinc"
 #include "res://shaders/sharpness.gdshaderinc"
+#include "res://shaders/projected_subtitles.gdshaderinc"
 
 vec3 clarity_sample(vec2 p, vec2 lo, vec2 hi, vec3 center) {
 	vec2 q = clamp(p, lo, hi);
@@ -126,4 +127,7 @@ void fragment() {
 	} else {
 		ALPHA = alpha_enabled && !depth_enabled ? (outside ? 0.0 : clamp(texture(alpha_texture, alpha_p).r, 0.0, 1.0)) : 1.0;
 	}
+	vec4 composed = caption_composite(ALBEDO, ALPHA, projected_caption(media_direction, eye_index));
+	ALBEDO = composed.rgb;
+	ALPHA = composed.a;
 }

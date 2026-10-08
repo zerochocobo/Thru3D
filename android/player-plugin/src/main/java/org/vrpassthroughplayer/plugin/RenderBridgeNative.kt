@@ -5,6 +5,10 @@ import java.nio.ByteBuffer
 /** Every call is made on Godot's GL thread with the creating EGL context current. */
 internal object RenderBridgeNative {
     init { System.loadLibrary("quest_render_bridge") }
+    /** Worker-only still-image path. RGBA row 0 is top, near is mono RF; output is packed SBS RGBA.
+     * Reuses video's forward warp, z-buffer, hole fill, rim and sliver cleanup. Returns elapsed us. */
+    @JvmStatic external fun photoStereo(rgba: ByteBuffer, width: Int, height: Int, near: ByteBuffer,
+        modelWidth: Int, modelHeight: Int, content: FloatArray, strength: Float, output: ByteBuffer): Long
     /** stereo: two views, side by side unless topBottom (top half is the left eye). */
     fun create(width: Int, height: Int, inputWidth: Int, inputHeight: Int, stereo: Boolean, topBottom: Boolean = false): Long =
         createLayout(width, height, inputWidth, inputHeight, if (!stereo) 0 else if (topBottom) 2 else 1)

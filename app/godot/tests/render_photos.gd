@@ -61,6 +61,8 @@ func _run() -> void:
 		photo.material.set_shader_parameter("test_eye",eye)
 		await centre_color(Color.BLUE if eye == 0 else Color.YELLOW,"TB eye %d" % eye)
 	# A right-stick zoom must grow the rendered boundary and content by the same ratio.
+	# Use a smaller straight screen so both complete boundaries fit the pixel oracle.
+	photo.set_screen_curve(0.0); photo.set_screen_scale(0.5)
 	photo.set_stereo_layout(0)
 	colors.fill(Color.BLUE); colors.fill_rect(Rect2i(240,80,32,96), Color.WHITE)
 	photo._texture.update(colors)
@@ -81,7 +83,7 @@ func _run() -> void:
 		or content_widths[0] < 10 or absf(float(content_widths[1]) / content_widths[0] - 1.35) > .06:
 		failures.append("Photo boundary and content must scale together: %s / %s" % [frame_widths, content_widths])
 	print("Photo zoom rendered boundary/content widths: %s / %s" % [frame_widths, content_widths])
-	photo.set_screen_scale(1.0); photo.set_corner_hover(-1)
+	photo.set_screen_scale(0.5); photo.set_corner_hover(-1)
 	# Constant near depth displaces the same square in opposite directions per eye.
 	photo.set_stereo_layout(0)
 	colors.fill(Color.BLACK); colors.fill_rect(Rect2i(240,80,32,96),Color.WHITE)

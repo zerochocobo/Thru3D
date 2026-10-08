@@ -16,7 +16,7 @@ internal object MpvSourceNative {
      * audioFiles: location/title pairs added as unselected audio tracks once the video loads. */
     @JvmStatic external fun create(context: Context, localPath: String, startMs: Int, hardware: Boolean, audio: Boolean,
                                    maxWidth: Int = 0, audioFiles: Array<String> = emptyArray(),
-                                   subtitleFiles: Array<String> = emptyArray()): Long
+                                   subtitleFiles: Array<String> = emptyArray(), exactStart: Boolean = true): Long
     /** Empty string when no completed image is available. Never waits for the GPU. */
     @JvmStatic external fun acquire(handle: Long): String
     /** Insert consumer-context fence after its last copy/draw; rejects double release. */
@@ -28,7 +28,7 @@ internal object MpvSourceNative {
     @JvmStatic external fun setSubtitle(handle: Long, trackId: Int): Long
     /** Plain text in a separate UI layer; empty when no newer snapshot is available. */
     @JvmStatic external fun subtitleStatus(handle: Long, afterSequence: Long): String
-    @JvmStatic external fun seek(handle: Long, positionMs: Long): Boolean
+    @JvmStatic external fun seek(handle: Long, positionMs: Long, exact: Boolean = true): Boolean
     /** Present at most fps source frames per second (0 = all), chosen by scheduled display time before rendering. */
     @JvmStatic external fun setFrameCap(handle: Long, fps: Int)
     /** Direct mode: publish the decoder's MediaCodec images ("hardware_buffer") instead of RGBA copies. */

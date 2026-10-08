@@ -242,11 +242,15 @@ func _quad(size: Vector2, location: Vector3, color: Color, priority: int) -> Mes
 	node.material_override = surface
 	return node
 
-func _material(color: Color, priority: int) -> StandardMaterial3D:
+func _material(color: Color, priority: int, overlay: bool = false) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.albedo_color = color
-	material.no_depth_test = true
+	# Keep icons/thumbnails in the ordered UI pass without writing depth over other UI.
+	# Only the interaction ray/reticle bypass the depth of tracked input models.
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	material.no_depth_test = overlay
 	material.render_priority = priority
 	return material
 
@@ -258,7 +262,7 @@ func _label(text: String, location: Vector3, size: int, parent: Node = self) -> 
 	label.font_size = size
 	label.pixel_size = 0.0012
 	label.position = location
-	label.no_depth_test = true
+	label.no_depth_test = false
 	label.render_priority = 12
 	label.outline_size = 0
 	parent.add_child(label)
@@ -272,14 +276,14 @@ func _pointer(hand: String) -> Dictionary:
 	var color := Color(0.15, 0.9, 1.0) if hand == "left_hand" else Color(1.0, 0.65, 0.15)
 	var line := MeshInstance3D.new()
 	line.mesh = ImmediateMesh.new()
-	line.material_override = _material(color, 14)
+	line.material_override = _material(color, 14, true)
 	add_child(line)
 	var dot := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
 	sphere.radius = 0.009
 	sphere.height = 0.018
 	dot.mesh = sphere
-	dot.material_override = _material(color, 15)
+	dot.material_override = _material(color, 15, true)
 	add_child(dot)
 	_pointers[hand] = {"line": line, "dot": dot}
 	return _pointers[hand]

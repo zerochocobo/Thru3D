@@ -16,7 +16,9 @@ var scenery_rotation := Vector3.ZERO
 
 func set_scenery(value: Sky, yaw_degrees: float = 0.0) -> void:
 	scenery = value
-	scenery_rotation = Vector3(0, deg_to_rad(yaw_degrees), 0)
+	# PanoramaSkyMaterial puts the texture seam along the viewer's default -Z axis.
+	# Treat 0 degrees as the image centre facing forward; keep user rotation relative to it.
+	scenery_rotation = Vector3(0, deg_to_rad(yaw_degrees) + PI, 0)
 	if environment: _set_background(applied_passthrough)
 
 func configure(target_viewport: Viewport, target_environment: Environment, interface: XRInterface, desktop_preview: bool) -> bool:

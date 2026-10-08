@@ -75,6 +75,8 @@ The build creates/validates the Kotlin plugin AARs, imports/exports Godot, check
 
 Release builds use `-BuildType Release`. `Prepare-ReleaseSigning.ps1` creates your own reusable local signing key under ignored build outputs. Back it up privately. No distribution key, password or original user's settings are provided in this repository.
 
+Distribution filenames identify platforms as `QUEST`, `PICO` and `OpenXR`, retaining the version and requested build date; for example `Thru3D-QUEST-0.3.0-release-20261009.apk`. Internal export-preset names and older debug fixture filenames can retain their existing names.
+
 The historical full conversion/diagnostic path remains available without `-UsePreparedModelAssets`, but requires upstream/reference models, the pinned project student, converter tools and generated numerical oracles. It is not the minimal build path and does not fetch the missing student automatically.
 
 Model conversion additionally uses ONNX Runtime, NumPy, ONNX simplification, Pillow/OpenCV and the matching MNN converter/Python bindings; distillation uses PyTorch and onnx2torch. These tools belong in separate local environments. The small model-tools requirements lock covers reference conversion packages, not every optional training/analysis tool.

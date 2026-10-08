@@ -267,7 +267,7 @@ func action(target: int) -> bool:
 				elif view == "scenes": load_servers()
 				elif view == "candidates": cancel(); view = "filters"
 				else: browse()
-			1, 14: setup = true; cancel(); menu.platform.media_server_accounts()
+			1, 14: cancel(); menu.account_panel.open("server", target == ACTION + 14)
 			2: keyboard = "search"; text = candidate_q if view == "candidates" else str(query.get("q", ""))
 			3: cancel(); view = "filters"; menu._reset_navigation()
 			4:

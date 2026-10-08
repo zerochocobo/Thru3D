@@ -18,14 +18,14 @@ class Host extends RefCounted:
 	var next_id := 7
 	func mpv_supported() -> bool:
 		return true
-	func open_mpv_video(uri: String, start: int, stereo: bool, profile: String, alpha: bool, vulkan: bool, _depth: bool = false, _top_bottom: bool = false) -> int:
+	func open_mpv_video(uri: String, start: int, stereo: bool, profile: String, alpha: bool, vulkan: bool, _depth: bool = false, _top_bottom: bool = false, _exact: bool = false) -> int:
 		calls.append([uri, start, stereo, profile, alpha, vulkan])
 		return next_id
 	func set_mpv_playing(_id: int, _playing: bool) -> void:
 		pass
 	func close_mpv_video(_id: int) -> void:
 		pass
-	func revise_mpv_video(_id: int, _stereo: bool, _alpha: bool, _profile: String, _position: int, _depth: bool = false, _top_bottom: bool = false) -> int:
+	func revise_mpv_video(_id: int, _stereo: bool, _alpha: bool, _profile: String, _position: int, _depth: bool = false, _top_bottom: bool = false, _exact: bool = false) -> int:
 		return 0
 
 func check(value: bool, message: String) -> void:

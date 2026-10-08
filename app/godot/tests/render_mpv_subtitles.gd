@@ -81,22 +81,22 @@ func _run() -> void:
 					visible_pixels[i] += 1
 	if visible_pixels[0] < 100 or visible_pixels[1] < 100 or visible_pixels[2] != 0:
 		failures.append("Caption pixels must survive zero video Alpha and disappear when off: " + str(visible_pixels))
-	# Flat subtitles preserve their screen-space anchor but use a far text plane.
+	# Flat subtitles share the screen's depth; VR preferences must not move them.
 	var anchor := video.panel.global_transform * Vector3(0, -video._flat.size.y * 0.5 + 0.06, 0.01)
-	for distance in [5.0, 10.0, 20.0]:
+	for distance in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0]:
 		video.subtitle_distance = distance
 		video._place_caption()
-		if absf(video.caption.global_position.distance_to(camera.global_position) - distance) > 0.01:
-			failures.append("Flat caption depth does not match setting")
+		if video.caption.global_position.distance_to(anchor) > 0.001 or not is_equal_approx(video.caption.pixel_size, 0.0016):
+			failures.append("Flat caption incorrectly follows immersive distance")
 		if camera.unproject_position(anchor).distance_to(camera.unproject_position(video.caption.global_position)) > 0.5:
 			failures.append("Flat caption angular anchor moved")
 	video.subtitle_distance = 2.0
-	if video.subtitle_distance != 5.0: failures.append("Legacy near distance was not migrated")
+	if video.subtitle_distance != 2.0: failures.append("Near subtitle distance was unexpectedly clamped")
 	# Immersive: at the chosen distance below the line of sight, the same angular size.
 	video.set_subtitle_track(9)
 	video.geometry = video.Geometry.Geometry.HALF_EQUIRECT
 	video._apply_geometry()
-	for distance in [5.0, 10.0, 20.0]:
+	for distance in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0]:
 		video.subtitle_distance = distance
 		video._subtitle_poll_ms = 0
 		video._poll_subtitles()
@@ -104,8 +104,17 @@ func _run() -> void:
 		if not video.caption.visible or absf(offset.length() - distance) > 0.01 or offset.y > -0.2 * distance \
 			or not is_equal_approx(video.caption.pixel_size, 0.001 * distance):
 			failures.append("VR caption at %s m: %s" % [distance, offset])
+	for geometry in [1, 2, 3]:
+		video.geometry = geometry
+		for position in 5:
+			video.subtitle_position = position
+			video._place_caption()
+			var offset: Vector3 = video.caption.global_position - camera.global_position
+			if absf(offset.length() - video.subtitle_distance) > 0.01 or absf(offset.y / offset.length() - sin(video.SubtitleDepth.elevation(position))) > 0.001:
+				failures.append("Immersive subtitle position mismatch")
+	video.subtitle_position = video.SubtitleDepth.DEFAULT_POSITION
 	var report := {"state": "passed" if failures.is_empty() else "failed", "caption_white_pixels": visible_pixels,
-		"scope": "Desktop production Label3D and video shader with synthetic textures/mock cue; native MPV/Quest/XR glyphs and timing not exercised",
+		"scope": "Desktop flat caption pixels, CC Off, immersive layout anchors with mock cue; projected glyph rendering is checked separately; native MPV/Quest timing not exercised",
 		"failures": failures}
 	FileAccess.open(output.path_join("verification.json"), FileAccess.WRITE).store_string(JSON.stringify(report, "\t"))
 	viewport.queue_free()

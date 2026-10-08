@@ -2,17 +2,27 @@
 
 ## Application and interaction
 
-`app/godot/scenes/main.tscn` and `scripts/main.gd` own application state. Godot OpenXR supplies tracking and the vendor-specific passthrough interface. GDScript menus use controller rays/triggers and hand pointing/pinching. While a menu is open, thumbsticks scroll rather than select controls or trigger playback shortcuts.
+`app/godot/scenes/main.tscn` and `scripts/main.gd` own application state. Godot OpenXR supplies tracking and the vendor-specific passthrough interface. GDScript menus use controller rays/triggers and hand pointing/pinching. Libraries, settings, list popups and photo menus reserve thumbsticks for scrolling. The ordinary video control bar permits seek, volume and immersive zoom shortcuts. Pointer capture suppresses shortcuts; leaving a list or ending capture requires the stick to return to center before reactivation.
 
 Display geometry separates flat/180°/360° projection from mono/SBS layout and eye order. Menu pages, per-file preferences and localization are independent of the Android media backend. The desktop path is a development preview and mock backend, not an equivalent Android/XR playback implementation.
 
-Version 0.2.1 adds persistent timestamp-only bookmarks (`bookmark_store`, `bookmark_menu`, `timeline_markers`), paged recent-file previews, cloud account/pagination handling, and input visuals. `input_visuals.gd` uses runtime render models when available and licensed glTF hand fallbacks. Seek keeps a presented frame until the target frame arrives. No ratings, stars or bookmark editing are exposed.
+The application includes persistent timestamp-only bookmarks (`bookmark_store`, `bookmark_menu`, `timeline_markers`), paged recent-file previews, cloud account/pagination handling, and input visuals. `input_visuals.gd` uses runtime render models when available and licensed glTF hand fallbacks. Seek keeps a presented frame until the target frame arrives; `seek_policy.gd` routes speed-first and precise positioning. No ratings, stars or bookmark editing are exposed.
+
+Photo presentation uses immersive screen geometry, adjacent-image preloading and a separate stereo cache. Flat-photo navigation uses a single-hand horizontal pinch drag followed by release; two-hand pinch zoom remains available. Photo stereo strength is capped at 100%, independently of video strength. `projected_subtitles.gd` and the shader include implement subtitles in the video projection.
 
 ## Android boundary
 
 `QuestPlayerPlugin.kt` exposes Godot-callable methods and owns Android media selection, libraries and lifecycle. Document grants, file descriptors and HTTP/SMB/cloud sources are managed in Kotlin. Authentication data stays in application-private storage; no account credentials belong in source control.
 
 The plugin contains older controlled MediaCodec/Media3 diagnostic paths. Normal video playback uses `MpvVideoBridge` and the native mpv source extension. Their presence in source does not mean that all paths execute during ordinary playback.
+
+Account and server forms are rendered by `account_panel.gd` inside the VR library.
+`AccountManager` owns transient authentication state and cancelled-request guards.
+Web authentication uses `InAppWebLogin` to transfer in-memory WebView frames and
+ray/keyboard events through the same host Activity. It does not launch account
+Activities or the PICO 2D shell. Pause keeps the current workflow; an explicit
+close cancels it. The global About page contains the license index and reader.
+These bridges still require device-specific website/input validation.
 
 ## Rendering and inference
 
