@@ -73,9 +73,11 @@ Obtain the matching runtime models separately as explained in [MODELS.md](MODELS
 
 The build creates/validates the Kotlin plugin AARs, imports/exports Godot, checks manifest/vendor settings, ELF/JNI linkage, model hashes, signing and 16 KiB packaging. These are build checks, not a headset playback acceptance test.
 
+Compatibility targets start at Quest 2 and PICO Neo3. PICO/OpenXR retain min SDK 29 for older Android devices; Quest retains 32/34. Version 0.3.1 packaging checks preserve the legacy-storage flag and existing read/all-files declarations. Android 10 uses the runtime read grant with legacy storage; newer Android versions use the separate all-files access path.
+
 Release builds use `-BuildType Release`. `Prepare-ReleaseSigning.ps1` creates your own reusable local signing key under ignored build outputs. Back it up privately. No distribution key, password or original user's settings are provided in this repository.
 
-Distribution filenames identify platforms as `QUEST`, `PICO` and `OpenXR`, retaining the version and requested build date; for example `Thru3D-QUEST-0.3.0-release-20261009.apk`. Internal export-preset names and older debug fixture filenames can retain their existing names.
+Distribution filenames identify platforms as `QUEST`, `PICO` and `OpenXR`, retaining the version and requested build date; for example `Thru3D-QUEST-0.3.1-release-20261009.apk`. Internal export-preset names and older debug fixture filenames can retain their existing names.
 
 The historical full conversion/diagnostic path remains available without `-UsePreparedModelAssets`, but requires upstream/reference models, the pinned project student, converter tools and generated numerical oracles. It is not the minimal build path and does not fetch the missing student automatically.
 

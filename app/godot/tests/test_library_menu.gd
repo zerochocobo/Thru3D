@@ -56,6 +56,7 @@ class FakePlatform extends "res://tests/account_platform_fixture.gd":
 		return _reply({"call": "local", "source": "local", "state": "ready", "path": path, "all_files": all_files, "entries": entries})
 	func media_local_grant_all_files() -> void:
 		grants += 1
+		(func(): media_list.emit(0, JSON.stringify({"source": "local_access", "state": "settings_opened"}))).call_deferred()
 	func media_smb_servers() -> int:
 		return _reply({"call": "smb_servers", "source": "smb", "state": "ready",
 			"servers": [{"id": "srv1", "name": "NAS", "host": "192.168.1.9", "user": "me", "has_password": true}]})
@@ -156,6 +157,14 @@ func _run() -> void:
 		"Without all-files access a button offers it")
 	menu._activate(Menu.ALL_FILES)
 	check(platform.grants == 1, "The button opens the system access page")
+	menu._activate(Menu.ALL_FILES)
+	check(platform.grants == 1, "Repeated grant presses cannot open concurrent permission pages")
+	await settle()
+	check(menu.status == "Allow access in system settings" and menu._local_grant_pending, "Settings launch is visible in the menu")
+	var before_resume := platform.calls.size()
+	platform.android_lifecycle.emit("resume")
+	await settle()
+	check(not menu._local_grant_pending and platform.calls.size() == before_resume + 1 and not menu.rows.is_empty(), "Returning from permissions refreshes the current local listing")
 	menu._activate(Menu.ROW_BASE)
 	await settle()
 	check(titles(menu) == ["Movies", "舞台.mp4"] and menu.rows[1].detail == "2.0 GB" and menu._header_title() == "Internal storage",
@@ -374,7 +383,19 @@ func _run() -> void:
 	menu._pending[998] = "local"
 	menu._on_media_list(998, JSON.stringify({"state": "denied", "error": "ALL_FILES_ACCESS_NEEDED"}))
 	menu._activate(Menu.GRANT)
-	check(menu.status == "All files access needed" and platform.grants == 2, "An unreadable folder asks for all-files access")
+	check(menu._local_grant_pending and platform.grants == 2, "An unreadable folder requests access")
+	await settle()
+	menu._on_media_list(0, JSON.stringify({"source": "local_access", "state": "error", "error": "Permission settings unavailable"}))
+	check(menu.status == "Permission settings unavailable" and not menu._local_grant_pending, "Unsupported settings show failure and release the retry guard")
+	var before_granted := platform.calls.size()
+	menu._on_media_list(0, JSON.stringify({"source": "local_access", "state": "granted"}))
+	await settle()
+	check(platform.calls.size() == before_granted + 1, "A legacy runtime grant refreshes the local folder without a settings resume")
+	menu._on_media_list(0, JSON.stringify({"source": "local_access", "state": "settings_opened"}))
+	var before_manual_refresh := platform.calls.size()
+	menu._activate(Menu.REFRESH)
+	await settle()
+	check(not menu._local_grant_pending and platform.calls.size() == before_manual_refresh + 1, "Manual refresh recovers a VR permission overlay without a resume event")
 	menu._pending[997] = "local"
 	menu._on_media_list(997, JSON.stringify({"state": "denied"}))
 	# Language: follows the choice, the same menu in Chinese and back in English.

@@ -163,6 +163,18 @@ foreach ($sdkAttribute in @('minSdkVersion', 'targetSdkVersion')) {
 if ($XrVendor -eq 'Quest' -and ($androidSdk.targetSdkVersion -ne 34 -or $androidSdk.minSdkVersion -ne 32)) {
     throw "Meta Quest APK must use Android min SDK 32 / target SDK 34; actual: $($androidSdk.minSdkVersion) / $($androidSdk.targetSdkVersion)."
 }
+if ($XrVendor -in @('Pico','OpenXR') -and $androidSdk.minSdkVersion -ne 29) {
+    throw 'PICO/standard OpenXR APK must retain Android min SDK 29 for older headsets.'
+}
+if ($manifestText -notmatch 'android:requestLegacyExternalStorage[^\r\n]*=true') {
+    throw 'APK lost Android 10 legacy shared-storage compatibility.'
+}
+foreach ($storagePermission in @('android.permission.READ_EXTERNAL_STORAGE','android.permission.MANAGE_EXTERNAL_STORAGE')) {
+    if (-not $manifestText.Contains($storagePermission)) { throw "APK is missing local storage permission: $storagePermission" }
+}
+if ($manifestText -notmatch ('android:versionName[^\r\n]*="' + [regex]::Escape($appVersion) + '"')) {
+    throw 'APK version differs from the project version.'
+}
 if ($BuildType -eq 'Release' -and ($manifestText -match 'android:debuggable[^\r\n]*=true' -or $manifestText -match 'DebugDiagnosticsReceiver|MpvDiagnosticActivity|LocalAccessTestProvider|DEBUG_RVM_STANDALONE')) {
     throw 'Distribution APK contains debugging or diagnostic entry points.'
 }

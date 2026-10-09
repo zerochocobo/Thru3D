@@ -5,7 +5,7 @@ config/name="Thru3D Media Player"
 ; Preserve existing Windows settings and media history across the display-name change.
 config/use_custom_user_dir=true
 config/custom_user_dir_name="Godot/app_userdata/VR Passthrough Player"
-config/version="0.3.0"
+config/version="0.3.1"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://branding/thru3d-icon.png"
@@ -29,10 +29,13 @@ openxr/reference_space=2
 openxr/default_action_map="res://openxr_action_map.tres"
 openxr/extensions/hand_tracking=true
 openxr/extensions/hand_interaction_profile=true
+; Keep PICO on the 0.2.1 controller/joint path pending native hand-profile validation.
+openxr/extensions/hand_interaction_profile.pico=false
 openxr/extensions/render_model=true
 openxr/extensions/meta/render_model=true
 openxr/extensions/meta/hand_tracking_mesh=true
 openxr/extensions/meta/hand_tracking_aim=true
+openxr/extensions/meta/hand_tracking_aim.pico=false
 openxr/extensions/meta/passthrough=true
 shaders/enabled=true
 

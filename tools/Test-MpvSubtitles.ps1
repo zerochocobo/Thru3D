@@ -34,5 +34,5 @@ if ($process.ExitCode -ne 0) { throw 'Projected subtitle rendering failed.' }
 $log = (Get-Content $stdout -Raw) + (Get-Content $stderr -Raw)
 if ($log -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Projected subtitle renderer reported errors.' }
 $render = Get-Content (Join-Path $env:PROJECTED_SUBTITLE_OUTPUT 'verification.json') -Raw | ConvertFrom-Json
-if ($render.state -ne 'passed' -or $render.samples.Count -ne 9) { throw 'Projected caption pixel evidence incomplete.' }
+if ($render.state -ne 'passed' -or $render.samples.Count -ne 9 -or $render.motion_samples.Count -ne 18) { throw 'Projected caption pixel evidence incomplete.' }
 Write-Output 'MPV subtitle native JSON/fixture mux/flat and three immersive projection rendering checks passed. Quest execution pending.'

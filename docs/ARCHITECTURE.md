@@ -14,6 +14,8 @@ Photo presentation uses immersive screen geometry, adjacent-image preloading and
 
 `QuestPlayerPlugin.kt` exposes Godot-callable methods and owns Android media selection, libraries and lifecycle. Document grants, file descriptors and HTTP/SMB/cloud sources are managed in Kotlin. Authentication data stays in application-private storage; no account credentials belong in source control.
 
+`LocalStoragePermissions` separates Android 10 legacy/read-permission access from Android 11+ all-files settings, with supported settings fallbacks and directory refresh. `DeviceBatteryStatus` interprets the sticky battery snapshot separately from cable connection; connected power alone does not mean charging.
+
 The plugin contains older controlled MediaCodec/Media3 diagnostic paths. Normal video playback uses `MpvVideoBridge` and the native mpv source extension. Their presence in source does not mean that all paths execute during ordinary playback.
 
 Account and server forms are rendered by `account_panel.gd` inside the VR library.

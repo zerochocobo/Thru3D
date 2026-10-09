@@ -3,6 +3,7 @@ package org.vrpassthroughplayer.plugin
 import android.opengl.GLES30
 import android.opengl.EGL14
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
 import android.text.format.DateFormat
 import androidx.media3.common.util.UnstableApi
@@ -191,13 +192,21 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     @UsedByGodot fun close_controlled_video(id: Int) { controlled.close(id) }
     @UsedByGodot fun set_controlled_playing(id: Int, playing: Boolean) { if (!closed.get()) controlled.setPlaying(id, playing) }
     @UsedByGodot fun request_controlled_status(id: Int) { if (!closed.get()) controlled.requestStatus(id) }
-    /** Headset battery and clock style for the menus' status pill: {"level": 0..100 or -1, "charging", "clock24"}. */
+    /** Headset battery and clock style: {"level": 0..100 or -1, "charging", "plugged", "clock24"}. */
     @UsedByGodot fun device_status(): String {
         val host = activity ?: return "{}"
         val battery = host.getSystemService(BatteryManager::class.java)
-        val level = battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-        return JSONObject().put("level", if (level in 0..100) level else -1)
-            .put("charging", battery?.isCharging ?: false)
+        // Read the latest sticky snapshot without subscribing a receiver or requesting permissions.
+        val snapshot = runCatching { host.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }.getOrNull()
+        val state = DeviceBatteryStatus.resolve(
+            snapshot?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1,
+            snapshot?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1,
+            snapshot?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN) ?: BatteryManager.BATTERY_STATUS_UNKNOWN,
+            snapshot?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1,
+            runCatching { battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1 }.getOrDefault(-1),
+            runCatching { battery?.isCharging ?: false }.getOrDefault(false))
+        return JSONObject().put("level", state.level)
+            .put("charging", state.charging).put("plugged", state.plugged)
             .put("clock24", DateFormat.is24HourFormat(host)).toString()
     }
     @UsedByGodot fun mpv_supported(): Boolean = !closed.get() && mpv.supported()

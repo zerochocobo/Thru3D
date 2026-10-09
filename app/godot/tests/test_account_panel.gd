@@ -58,6 +58,14 @@ func _run() -> void:
 	check(panel.challenge_revision == 2 and panel.selected.is_empty(), "new challenge replaces old captcha selection")
 	state.state = "sms"; state.sms_wait = 60; state.sms_sent = false; state.revision += 1; panel.poll()
 	check(panel.view == "sms" and panel.field == "sms", "SMS stays inside app")
+	first_key = menu._buttons.filter(func(button): return button.target == Accounts.KEY)[0]
+	var sms_field: Dictionary = menu._buttons.filter(func(button): return button.target == Accounts.FIELD)[0]
+	var sms_send: Dictionary = menu._buttons.filter(func(button): return button.target == Accounts.BASE + 9)[0]
+	var sms_verify: Dictionary = menu._buttons.filter(func(button): return button.target == Accounts.BASE + 10)[0]
+	check(sms_send.rect.position.y > first_key.rect.end.y and sms_verify.rect.position.y > first_key.rect.end.y,
+		"SMS send and verify buttons are above the keyboard")
+	check(sms_send.rect.end.y < sms_field.rect.position.y and sms_verify.rect.end.y < sms_field.rect.position.y,
+		"SMS action row stays below the code field without overlapping it")
 	check(not menu._buttons.filter(func(b): return b.target == Accounts.BASE + 9)[0].enabled, "SMS cooldown disables resend")
 	state.sms_wait = 59; panel.poll(); check(menu.text_snapshot().contains("59s"), "cooldown updates without a network result")
 	state.state = "web"; state.web = {"editing": false, "status": "", "width": 1200, "height": 720, "scroll_range": 2160, "scroll_y": 0}; state.revision += 1; panel.poll()

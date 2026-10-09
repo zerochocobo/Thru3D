@@ -4,7 +4,9 @@
 
 Standalone Android VR/MR media player for Meta Quest and PICO. Thru3D combines a Godot OpenXR interface, Android media access, a native libmpv renderer, and MNN inference for video matting and depth-based stereo rendering.
 
-Current source version: **0.3.0** (Android versionCode **5**). An experimental standard OpenXR Android export is also available.
+Current source version: **0.3.1** (Android versionCode **6**). An experimental standard OpenXR Android export is also available.
+
+Minimum compatibility targets are **Quest 2** and **PICO Neo3**. Source/build compatibility does not establish hardware performance or interaction acceptance on every device.
 
 ## Features
 

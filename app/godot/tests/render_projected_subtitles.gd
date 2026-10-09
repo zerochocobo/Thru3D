@@ -23,9 +23,11 @@ func _run():
 	root.add_child(viewport)
 	var head := Camera3D.new()
 	viewport.add_child(head)
+	head.position.y = 1.6
 	var eye := Camera3D.new()
 	eye.fov = 90
 	viewport.add_child(eye)
+	eye.position.y = 1.6
 	eye.make_current()
 	var video := Video.new()
 	viewport.add_child(video)
@@ -45,13 +47,13 @@ func _run():
 	video.material.set_shader_parameter("model_size", Vector2(2, 2))
 	video.material.set_shader_parameter("sharpness", 0)
 	var samples: Array[Dictionary] = []
+	var motion_samples: Array[Dictionary] = []
 	for geometry in [1, 2, 3]:
 		video.geometry = geometry
 		video._apply_geometry()
 		video.panel.visible = true
 		for distance in [0.5, 2.0, 20.0]:
 			video.subtitle_distance = distance
-			video._caption_direction = Vector3.ZERO
 			video._place_caption()
 			var centers: Array[Vector2] = []
 			for index in 2:
@@ -72,6 +74,36 @@ func _run():
 			var actual_y := centers[0].y - centers[1].y
 			if absf(actual - expected) > 0.9 or absf(actual_y - expected_y) > 0.4: failures.append("Geometry/parallax mismatch")
 			samples.append({"geometry":geometry,"distance_m":distance,"actual_pixels":actual,"expected_pixels":expected,"vertical_pixels":actual_y,"expected_vertical_pixels":expected_y})
+		# Keep a spectator eye fixed and vary the pose supplied to production caption placement.
+		# Following the head would move actual glyph pixels against the stationary video here.
+		video.material.set_shader_parameter("probe_eye", 0)
+		eye.position.x = -0.0315
+		head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
+		video._place_caption()
+		await RenderingServer.frame_post_draw
+		await RenderingServer.frame_post_draw
+		var baseline := centroid(viewport.get_texture().get_image())
+		var anchor: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+		for pose in [Vector3(0, 60, 0), Vector3(0, -60, 0), Vector3(35, 0, 0), Vector3(-35, 0, 0), Vector3(0, 0, 40), Vector3(20, -45, -30)]:
+			head.rotation = pose * PI / 180.0
+			head.position = Vector3(0.2, 1.75, 0.1)
+			for frame in 12:
+				video._place_caption()
+				await process_frame
+			await RenderingServer.frame_post_draw
+			var shift := centroid(viewport.get_texture().get_image()).distance_to(baseline)
+			var current: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+			if shift > 0.15 or not current.is_equal_approx(anchor): failures.append("Head pose moves caption relative to video")
+			motion_samples.append({"geometry":geometry,"head_rotation_degrees":[pose.x,pose.y,pose.z],"glyph_shift_pixels":shift})
+		# A video adjustment must carry its captions with it; the local anchor stays unchanged.
+		video.turn_view(0.1, 0.05)
+		video.zoom_view(0.1)
+		video._place_caption()
+		var adjusted: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+		if not adjusted.is_equal_approx(anchor): failures.append("Video adjustment changes local caption anchor")
+		video.reset_view()
+		head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
+		video._center_on_view()
 	video.projected_subtitles.clear(video.material)
 	video.material.set_shader_parameter("alpha_enabled", true)
 	await RenderingServer.frame_post_draw
@@ -83,7 +115,7 @@ func _run():
 			var c := dark.get_pixel(x,y)
 			if minf(c.r,minf(c.g,c.b))>0.8: bright+=1
 	if bright != 0: failures.append("CC Off leaves projected glyphs")
-	var report := {"state":"passed" if failures.is_empty() else "failed","samples":samples,"failures":failures,"scope":"Production video shader + actual projected glyph texture, two desktop eye cameras; native XR acceptance remains separate"}
+	var report := {"state":"passed" if failures.is_empty() else "failed","samples":samples,"motion_samples":motion_samples,"failures":failures,"scope":"Production video shader + actual glyph pixels, two desktop eye cameras and head pose changes; native XR acceptance remains separate"}
 	FileAccess.open(output.path_join("verification.json"),FileAccess.WRITE).store_string(JSON.stringify(report,"\t"))
 	print(JSON.stringify(report))
 	viewport.queue_free()

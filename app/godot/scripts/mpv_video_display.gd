@@ -80,10 +80,6 @@ var subtitle_position := SubtitleDepth.DEFAULT_POSITION:
 const ProjectedSubtitles := preload("res://scripts/projected_subtitles.gd")
 var projected_subtitles: Node
 const CAPTION_DROP := 0.244 # radians below the line of sight (14 degrees)
-const CAPTION_SLACK := 0.314 # radians (18 degrees) the head turns before the subtitles follow
-var _caption_direction := Vector3.ZERO
-var _caption_following := false
-var _caption_ms := 0
 var _subtitle_poll_ms := 0
 var _subtitle_received_ms := 0
 var mode_memory := ModeMemory.new()
@@ -897,14 +893,6 @@ func _poll_subtitles() -> void:
 		projected_subtitles.clear(material)
 
 func _place_caption() -> void:
-	var now := Time.get_ticks_msec()
-	var delta := clampf((now - _caption_ms) / 1000.0, 0.0, 0.1)
-	_caption_ms = now
-	var eye := Vector3(0, 1.6, 0)
-	var forward := Vector3.FORWARD
-	if view_camera and view_camera.is_inside_tree():
-		eye = view_camera.global_position
-		forward = -view_camera.global_basis.z
 	if geometry == Geometry.Geometry.FLAT:
 		# Ordinary video captions stay on the screen, independent of immersive preferences.
 		var anchor := panel.global_transform * Vector3(0, -_flat.size.y * 0.5 + 0.06, 0.01)
@@ -915,31 +903,11 @@ func _place_caption() -> void:
 		caption.pixel_size = 0.0016
 		caption.width = _flat.size.x * 0.9 / 0.0016
 		caption.global_transform = Transform3D(panel.global_basis, anchor)
-		_caption_direction = Vector3.ZERO
 		return
-	# Lazy follow: still while the head looks around a little, then glides back in front.
-	if _caption_direction == Vector3.ZERO:
-		_caption_direction = forward
-	elif _caption_following or _caption_direction.angle_to(forward) > CAPTION_SLACK:
-		_caption_following = _caption_direction.angle_to(forward) > deg_to_rad(2.0)
-		_caption_direction = _caption_direction.slerp(forward, minf(1.0, delta * 4.0)).normalized()
-	var up := Vector3.UP if absf(_caption_direction.y) < 0.98 else Vector3.BACK
-	var facing := Basis.looking_at(_caption_direction, up)
-	var place := facing * (Basis(Vector3.RIGHT, SubtitleDepth.elevation(subtitle_position)) * Vector3(0, 0, -subtitle_distance))
-	# Same angular size at any distance.
-	caption.pixel_size = 0.001 * subtitle_distance
-	caption.width = 700
-	caption.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	caption.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	caption.global_transform = Transform3D(Basis(), eye + place)
-	caption.layers = 0 # Immersive glyphs are drawn once, inside the video projection below.
-	var ray := place.normalized()
-	var relative := eye - panel.global_position
-	var b := relative.dot(ray)
-	var along := -b + sqrt(maxf(0, b * b - relative.length_squared() + SPHERE_RADIUS * SPHERE_RADIUS))
-	var local_direction := panel.global_basis.inverse() * (eye + ray * along - panel.global_position)
-	var local_up := panel.global_basis.inverse() * (view_camera.global_basis.y if view_camera else Vector3.UP)
-	var anchor_basis := Basis.looking_at(local_direction.normalized(), local_up.normalized())
+	# Anchor in the video's coordinates, like burned-in captions. Head pose never changes it.
+	# Rotating/recentering/zooming the video moves the picture and its captions together.
+	var anchor_basis := Basis(Vector3.RIGHT, SubtitleDepth.elevation(subtitle_position))
+	caption.layers = 0 # The live text patch is drawn only by the video's shader.
 	projected_subtitles.update_patch(caption, material, anchor_basis, subtitle_distance, ProjectedSubtitles.runtime_ipd())
 
 func seek_relative(delta_ms: int) -> bool:
@@ -1371,10 +1339,6 @@ func _apply_geometry() -> void:
 	material.set_shader_parameter("depth_enabled", depth_enabled and not _binding.warped)
 	material.set_shader_parameter("depth_shift", DEPTH_SHIFT * depth_strength if depth_requested else 0.0)
 
-func reset_view() -> void:
-	super.reset_view()
-	_caption_direction = Vector3.ZERO
-
 func layout_snapshot() -> Dictionary:
 	var playback := control.snapshot()
 	playback["seek_method"] = "mpv_absolute_" + ("exact" if _last_seek_mode == SeekPolicy.EXACT else "keyframes") + "_and_processing_generation"
@@ -1393,11 +1357,17 @@ func layout_snapshot() -> Dictionary:
 			"distance_m": subtitle_distance, "position": subtitle_position,
 			"runtime_ipd_m": ProjectedSubtitles.runtime_ipd(),
 			"angular_parallax_rad": material.get_shader_parameter("subtitle_parallax"),
+			"anchor_space": "screen" if geometry == Geometry.Geometry.FLAT else "video_local",
+			"anchor_direction": _subtitle_anchor_direction(),
 			"source_frame_sync_verified": false, "device_validation": "pending"},
 		"frame_hold": {"visible": panel.visible, "frozen": _is_frozen(), "capture_pending": _freeze_request > 0,
 			"frame_id": int(_binding.ticket.get("frame_id", -1)), "pts_us": int(_binding.ticket.get("pts_us", -1)),
 			"frozen_frame_id": int(_binding.ticket.get("frozen_frame_id", 0)),
 			"freeze_copy_us": int(_binding.ticket.get("freeze_copy_us", 0))}, "device_validation": "pending"}
+
+func _subtitle_anchor_direction() -> Array:
+	var anchor := Basis(Vector3.RIGHT, SubtitleDepth.elevation(subtitle_position)) * Vector3.FORWARD
+	return [anchor.x, anchor.y, anchor.z]
 
 func _can_loop() -> bool:
 	if not loop_enabled or not requested_play or media.state != "ended" or _waiting_first or not _pending_revision.is_empty():

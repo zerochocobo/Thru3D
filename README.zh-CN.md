@@ -4,7 +4,9 @@
 
 面向 Meta Quest 和 PICO 的独立 Android VR/MR 媒体播放器。使用 Godot OpenXR 构建界面，Kotlin 管理媒体与授权，libmpv/FFmpeg 解码，MNN OpenCL 执行人物抠像与深度推理。
 
-当前源码版本：**0.3.0**，Android versionCode **5**；另提供实验性的标准 OpenXR Android 导出目标。
+当前源码版本：**0.3.1**，Android versionCode **6**；另提供实验性的标准 OpenXR Android 导出目标。
+
+最低兼容目标为 **Quest 2、PICO Neo3**。源码和构建兼容不等于所有机型的性能、显示及交互均已实机验收。
 
 ## 功能
 

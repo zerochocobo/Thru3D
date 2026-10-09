@@ -26,6 +26,20 @@ func capture(viewport: SubViewport, label: String) -> Image:
 func difference(a: Color, b: Color) -> float:
 	return Vector3(a.r - b.r, a.g - b.g, a.b - b.b).length()
 
+func power_pixels(image: Image, camera: Camera3D, pill: Node3D, charging: bool) -> int:
+	# Inspect the actual lightning artwork, excluding the transparent texture margins.
+	var half := Vector3(pill.ICON * 5.0 / 24, pill.ICON * 10.0 / 24, 0)
+	var top_left := camera.unproject_position(pill._bolt.to_global(Vector3(-half.x, half.y, 0)))
+	var bottom_right := camera.unproject_position(pill._bolt.to_global(Vector3(half.x, -half.y, 0)))
+	var pixels := 0
+	for y in range(ceili(top_left.y), floori(bottom_right.y) + 1):
+		for x in range(ceili(top_left.x), floori(bottom_right.x) + 1):
+			var color := image.get_pixel(x, y)
+			var matches := (color.g > 0.7 and color.b > 0.5 and color.g - color.r > 0.15) if charging else (color.r > 0.9 and color.g > 0.6 and color.r - color.b > 0.35)
+			if matches:
+				pixels += 1
+	return pixels
+
 func _run() -> void:
 	var viewport := SubViewport.new()
 	viewport.size = Vector2i(600, 600)
@@ -60,6 +74,18 @@ func _run() -> void:
 	menu.add_child(thumbnail)
 	menu.visible = true
 	var menu_only := await capture(viewport, "menu")
+	check(power_pixels(menu_only, camera, menu.device_status, true) >= 30, "Charging lightning has visible green pixels at menu scale")
+	menu.device_status.status_provider = func(): return {"level": 75, "charging": false, "plugged": true, "clock24": true}
+	menu.device_status.refresh(true)
+	var power_only := await capture(viewport, "power-connected")
+	check(power_pixels(power_only, camera, menu.device_status, false) >= 30, "Connected but not charging lightning has visible amber pixels")
+	menu.device_status.status_provider = func(): return {"level": 75, "charging": false, "plugged": false, "clock24": true}
+	menu.device_status.refresh(true)
+	var unplugged := await capture(viewport, "power-unplugged")
+	check(power_pixels(unplugged, camera, menu.device_status, true) == 0 and power_pixels(unplugged, camera, menu.device_status, false) == 0,
+		"Unplugging clears the lightning pixels")
+	menu.device_status.status_provider = func(): return {"level": 75, "charging": true, "plugged": true, "clock24": true}
+	menu.device_status.refresh(true)
 	var occluder := MeshInstance3D.new()
 	occluder.mesh = BoxMesh.new()
 	occluder.mesh.size = Vector3(0.65, 0.65, 0.04)

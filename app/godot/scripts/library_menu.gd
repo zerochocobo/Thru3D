@@ -120,6 +120,7 @@ var _pending := {}                 # request id -> kind
 var _local_entries: Array = []
 var _local_stack: Array = []       # [{id, title}] from a storage volume down to the open folder
 var _local_all_files := true       # the last listing could read the whole disk
+var _local_grant_pending := false
 var _smb_servers: Array = []
 var _smb_found: Array = []
 var _smb_server := ""
@@ -175,6 +176,11 @@ func attach_platform(value: Object) -> void:
 		platform.connect("android_lifecycle", _on_android_lifecycle)
 
 func _on_android_lifecycle(state: String) -> void:
+	if state == "resume" and _local_grant_pending:
+		_local_grant_pending = false
+		if section == Section.LOCAL and not account_panel.active():
+			_load_section()
+			refresh()
 	if account_panel.active():
 		account_panel.lifecycle(state)
 		return
@@ -427,6 +433,16 @@ func _on_media_list(id: int, payload: String) -> void:
 	# Unsolicited store notifications also work when Quest does not pause/resume VR.
 	if id == 0:
 		var event: Variant = JSON.parse_string(payload)
+		if event is Dictionary and event.get("source") == "local_access":
+			var access_state := str(event.get("state", "error"))
+			_local_grant_pending = access_state in ["requested", "settings_opened"]
+			if section != Section.LOCAL or account_panel.active(): return
+			if access_state == "granted": _load_section()
+			elif access_state == "settings_opened": status = "Allow access in system settings"
+			elif access_state == "requested": status = "Media access needed"
+			else: status = str(event.get("error", "Permission settings unavailable"))
+			if visible: refresh()
+			return
 		if event is Dictionary and event.get("source") == "medialib" and event.get("state") == "accounts_changed":
 			server_browser.setup = false
 			if section == Section.MEDIA_SERVER:
@@ -489,6 +505,16 @@ func _on_media_list(id: int, payload: String) -> void:
 					_dlna_entries = result.get("entries", [])
 	if visible:
 		refresh()
+
+func _grant_local_access() -> void:
+	if _local_grant_pending: return
+	if not PlatformMethods.supports(platform, "media_local_grant_all_files"):
+		status = "Permission settings unavailable"
+	else:
+		_local_grant_pending = true
+		status = "Loading…"
+		platform.media_local_grant_all_files()
+	refresh()
 
 func _load_section() -> void:
 	if section == Section.MEDIA_SERVER:
@@ -815,13 +841,9 @@ func _activate(target: int) -> void:
 		var current: Array = _smb_servers.filter(func(s): return str(s.id) == _smb_server)
 		_open_editor(current[0] if current.size() > 0 else {})
 	elif target == GRANT:
-		if status == "All files access needed":
-			platform.media_local_grant_all_files()
-		else:
-			_load_section()
-		refresh()
+		_grant_local_access()
 	elif target == ALL_FILES:
-		platform.media_local_grant_all_files()
+		_grant_local_access()
 	elif target == CLEAR_HISTORY:
 		if _confirm != "clear_history":
 			_confirm = "clear_history"
@@ -1018,7 +1040,7 @@ func _refresh_source() -> void:
 		return
 	match section:
 		Section.LOCAL:
-			pass # _load_section below reads the folder again
+			_local_grant_pending = false # Also recovers when a VR settings overlay sends no resume.
 		Section.SMB:
 			if _smb_server.is_empty():
 				_request("smb_found", platform.media_smb_discover())
@@ -1136,7 +1158,7 @@ func _draw() -> void:
 			_button(CLOUD_ACCOUNTS, "", Vector2(0.69, 0.46), Vector2(0.09, 0.07), platform != null, "plus")
 			_tips[CLOUD_ACCOUNTS] = I18n.t("Cloud accounts")
 	if section == Section.LOCAL and not _local_all_files and platform:
-		_button(ALL_FILES, "", Vector2(0.69, 0.46), Vector2(0.09, 0.07), true, "unlock")
+		_button(ALL_FILES, "", Vector2(0.69, 0.46), Vector2(0.09, 0.07), not _local_grant_pending, "unlock")
 		_tips[ALL_FILES] = I18n.t("Allow access to all files")
 	if section == Section.RECENT and not rows.is_empty():
 		# Two presses: the first lights the button, the second clears.
@@ -1155,7 +1177,7 @@ func _draw() -> void:
 		_button(RESTART_APP, I18n.t("Restart app"), Vector2(0.10, -0.515), Vector2(0.42, 0.07), true, "refresh")
 		_button(QUIT_APP, I18n.t("Close app"), Vector2(0.59, -0.515), Vector2(0.42, 0.07), true, "close")
 	if status in ["Video access needed", "Media access needed", "All files access needed"]:
-		_button(GRANT, I18n.t("Grant"), Vector2(0.19, -0.34), Vector2(0.3, 0.07), true, "", true)
+		_button(GRANT, I18n.t("Grant"), Vector2(0.19, -0.34), Vector2(0.3, 0.07), not _local_grant_pending, "", true)
 	if section != Section.SETTINGS and not cloud_managing:
 		for i in MEDIA_FILTERS.size():
 			_button(FILTER_BASE + i, I18n.t(MEDIA_FILTERS[i]), Vector2(0.36 + i * 0.18, -0.515), Vector2(0.17, 0.06), true, "", media_filter == i)

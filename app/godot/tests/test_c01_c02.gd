@@ -65,6 +65,10 @@ func _check_export_targets() -> void:
 		var name := str(presets.get_value(section, "name", ""))
 		_check(expected.has(name), "Unknown XR export target: " + name)
 		if not expected.has(name): continue
+		if expected[name] == "pico":
+			_check("pico" in str(presets.get_value(section, "custom_features", "")).split(","), "PICO export must activate its compatibility settings")
+			_check(ProjectSettings.get_setting("xr/openxr/extensions/hand_interaction_profile.pico", true) == false, "PICO keeps the previously usable controller/joint path")
+			_check(ProjectSettings.get_setting("xr/openxr/extensions/meta/hand_tracking_aim.pico", true) == false, "PICO keeps joint fallback instead of newly enabled Meta aim")
 		var options := section + ".options"
 		for vendor in ["meta", "pico", "khronos", "androidxr"]:
 			_check(bool(presets.get_value(options, "xr_features/enable_%s_plugin" % vendor, false)) == (vendor == expected[name]), "Each export must enable exactly its intended vendor: " + name + "/" + vendor)

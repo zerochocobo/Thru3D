@@ -32,40 +32,79 @@ internal class LocalVideoLibrary(
     private val permissions = if (Build.VERSION.SDK_INT >= 33) arrayOf(permission, Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_AUDIO)
         else arrayOf(permission)
     private var mediaAsked = false // A partial grant still permits browsing its available media.
+    private var grantWaiting = false
 
     /** Main thread. path "" lists the storage volumes. Asks for the media permission once if needed. */
     fun browse(id: Int, path: String) {
         val activity = host() ?: return emit(id, state("error", "ACTIVITY_UNAVAILABLE"))
-        if (waiting.isNotEmpty()) { waiting.add(id to path); return }
+        if (grantWaiting || waiting.isNotEmpty()) { waiting.add(id to path); return }
         val readable = activity.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED ||
             (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED)
         if (allFiles() || permissions.all { activity.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } ||
             (mediaAsked && readable)) return list(id, path)
         waiting.add(id to path)
         mediaAsked = true
-        if (waiting.size == 1) activity.requestPermissions(permissions, REQUEST)
+        if (waiting.size == 1) {
+            try { activity.requestPermissions(permissions, REQUEST) }
+            catch (_: Exception) { finishBrowsePermission(false) }
+        }
     }
 
     fun onPermissionResult(requestCode: Int, granted: Boolean) {
-        if (requestCode != REQUEST) return
+        if (requestCode != REQUEST && requestCode != GRANT_REQUEST) return
+        val explicitGrant = grantWaiting || requestCode == GRANT_REQUEST
+        grantWaiting = false
+        finishBrowsePermission(granted)
+        if (explicitGrant) {
+            val activity = host()
+            if (allFiles()) accessEvent("granted")
+            else if (activity != null && !activity.shouldShowRequestPermissionRationale(permission)) openAccessSettings(activity)
+            else accessEvent("denied", "Media access needed")
+        }
+    }
+
+    private fun finishBrowsePermission(granted: Boolean) {
         val requests = waiting.toList(); waiting.clear()
         val readable = permissions.filter { it != Manifest.permission.READ_MEDIA_AUDIO }
             .any { host()?.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } || granted
         for ((id, path) in requests) if (readable) list(id, path) else emit(id, state("denied", "MEDIA_PERMISSION_DENIED"))
     }
 
-    private fun allFiles() = Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
+    private fun allFiles(): Boolean = LocalStoragePermissions.allFiles(Build.VERSION.SDK_INT,
+        Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager(),
+        Build.VERSION.SDK_INT < 30 && Environment.isExternalStorageLegacy(),
+        host()?.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)
 
-    /** Main thread: the system page for "All files access"; false when this device has none. */
-    fun grantAllFiles(): Boolean {
-        val activity = host() ?: return false
-        if (Build.VERSION.SDK_INT < 30) return false
-        for (intent in listOf(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${activity.packageName}")),
-                              Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))) {
-            try { activity.startActivity(intent); return true } catch (_: Throwable) { }
-        }
-        return false
+    /** Main thread: explicit Grant button, with observable results even on older PICO OS. */
+    fun grantAllFiles() {
+        val activity = host() ?: return accessEvent("error", "Permission settings unavailable")
+        if (grantWaiting) return
+        if (allFiles()) return accessEvent("granted")
+        if (Build.VERSION.SDK_INT < 30 && activity.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            grantWaiting = true
+            accessEvent("requested")
+            // Reuse a browse-triggered prompt already in flight; do not open a second one.
+            if (waiting.isNotEmpty()) return
+            try { activity.requestPermissions(permissions, GRANT_REQUEST) }
+            catch (_: Exception) {
+                grantWaiting = false
+                finishBrowsePermission(false)
+                openAccessSettings(activity)
+            }
+        } else openAccessSettings(activity)
     }
+
+    private fun openAccessSettings(activity: Activity) {
+        val opened = LocalStoragePermissions.openSettings(Build.VERSION.SDK_INT) { action ->
+            val intent = Intent(action)
+            if (action != Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION) intent.data = Uri.parse("package:${activity.packageName}")
+            activity.startActivity(intent)
+        }
+        accessEvent(if (opened) "settings_opened" else "error", if (opened) "" else "Permission settings unavailable")
+    }
+
+    private fun accessEvent(state: String, error: String = "") = emit(0,
+        JSONObject().put("source", "local_access").put("state", state).put("error", error).toString())
 
     private fun list(id: Int, path: String) {
         val context = host()?.applicationContext ?: return emit(id, state("error", "ACTIVITY_UNAVAILABLE"))
@@ -114,5 +153,5 @@ internal class LocalVideoLibrary(
 
     fun close() { worker.shutdownNow() }
 
-    companion object { const val REQUEST = 0x5661 }
+    companion object { const val REQUEST = 0x5661; const val GRANT_REQUEST = 0x5662 }
 }

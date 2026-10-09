@@ -80,6 +80,12 @@ func _check_device_status() -> void:
 	pill.clock_provider = func() -> Dictionary: return {"hour": 13, "minute": 5}
 	root.add_child(pill)
 	check(pill.text_snapshot() == "85%   13:05" and pill._battery.visible and not pill._bolt.visible, "Status pill: battery and 24 h clock")
+	status["level"] = 19
+	pill.refresh(true)
+	check(pill._battery.material_override.albedo_color == pill.LOW_COLOR and pill._fill.material_override.get_shader_parameter("surface_color") == pill.LOW_COLOR, "Status pill: below 20 percent and not charging shows red outline and fill")
+	status["level"] = 20
+	pill.refresh(true)
+	check(pill._battery.material_override.albedo_color != pill.LOW_COLOR and pill._fill.material_override.get_shader_parameter("surface_color") != pill.LOW_COLOR, "Status pill: exactly 20 percent is not low battery")
 	status.clear()
 	status.merge({"level": 12, "charging": false, "clock24": false})
 	pill.refresh(true)
@@ -89,13 +95,28 @@ func _check_device_status() -> void:
 	status.merge({"level": 12, "charging": true, "clock24": false})
 	pill.refresh(true)
 	check(pill._bolt.visible and pill._battery.material_override.albedo_color != pill.LOW_COLOR, "Status pill: charging shows bolt, not red")
+	check(pill._bolt.material_override.albedo_color == pill.Menu.ACCENT and pill._battery.material_override.albedo_color == pill.Menu.ACCENT, "Status pill: charging tints bolt and battery green")
+	# Power-only changes must redraw even when the percentage and clock are unchanged.
+	status.merge({"charging": false, "plugged": true}, true)
+	pill._polled_ms = Time.get_ticks_msec() - pill.POLL_MS
+	pill.refresh()
+	check(pill._bolt.visible and pill._bolt.material_override.albedo_color == pill.POWER_COLOR and pill._battery.material_override.albedo_color == pill.LOW_COLOR, "Status pill: connected but discharging shows amber power, keeps low warning")
+	status["plugged"] = false
+	pill._polled_ms = Time.get_ticks_msec() - pill.POLL_MS
+	pill.refresh()
+	check(not pill._bolt.visible, "Status pill: unplugging removes bolt without a clock or percentage change")
+	status.merge({"level": 0, "charging": true, "plugged": true}, true)
+	pill.refresh(true)
+	check(pill._bolt.visible and not pill._fill.visible, "Status pill: zero percent still shows charging")
+	status["level"] = 12
+	pill.refresh(true)
 	I18n.use("zh")
 	pill.refresh(true)
 	check(pill.text_snapshot() == "12%   下午 1:05", "Status pill: Chinese 12 h clock")
 	I18n.use("en")
 	status.clear()
 	pill.refresh(true)
-	check(pill.text_snapshot() == "13:05" and not pill._battery.visible, "Status pill: clock only without a battery source")
+	check(pill.text_snapshot() == "13:05" and not pill._battery.visible and not pill._bolt.visible, "Status pill: clock only without a battery source")
 	pill.free()
 
 func setting_click(menu: Node3D, target: int) -> bool:

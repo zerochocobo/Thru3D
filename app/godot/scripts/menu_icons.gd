@@ -66,7 +66,7 @@ const PATHS := {
 	"history": '<path d="M3 12A9 9 0 1 0 6 5.3M3 3V8H8"/><path d="M12 7V12L15 14"/>',
 	"usb": '<path d="M12 2V17M12 2L9 5M12 2L15 5M12 11L7 8V6M12 13L17 10V8"/><circle cx="12" cy="19" r="2.5"/><rect x="5.5" y="4.5" width="3" height="2"/><circle cx="17" cy="7" r="1.3"/>',
 	"battery": '<rect x="7" y="4" width="10" height="18" rx="2"/><path d="M10 2H14"/>',
-	"bolt": '<path d="M13.5 6.5L9 13.5H12.2L10.5 19.5 15 12.5H11.8Z" fill="white" stroke="none"/>',
+	"bolt": '<path d="M14 2L7 13H11L10 22 17 10H13Z" fill="white" stroke="none"/>',
 	"lock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7A4 4 0 0 1 16 7V11"/>',
 	"unlock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7A4 4 0 0 1 15.5 5"/>',
 	"voice": '<circle cx="8" cy="8" r="3.5"/><path d="M2 21C2 15.5 14 15.5 14 21M17 6.5A4 4 0 0 1 17 12.5M20 4A8 8 0 0 1 20 15"/>'}

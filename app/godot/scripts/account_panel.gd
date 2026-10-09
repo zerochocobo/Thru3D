@@ -236,8 +236,8 @@ func draw() -> void:
 		draw_fields(enabled); draw_keyboard(enabled)
 		if view == "sms":
 			var wait := int(data.get("sms_wait", 0))
-			menu._button(BASE + 9, str(wait) + "s" if wait > 0 else I18n.t("Send SMS code"), Vector2(-0.14, -0.51), Vector2(0.42, 0.07), enabled and wait == 0)
-			menu._button(BASE + 10, I18n.t("Verify and sign in"), Vector2(0.4, -0.51), Vector2(0.48, 0.07), enabled and bool(data.get("sms_sent", false)))
+			menu._button(BASE + 9, str(wait) + "s" if wait > 0 else I18n.t("Send SMS code"), Vector2(-0.14, 0.15), Vector2(0.42, 0.07), enabled and wait == 0)
+			menu._button(BASE + 10, I18n.t("Verify and sign in"), Vector2(0.4, 0.15), Vector2(0.48, 0.07), enabled and bool(data.get("sms_sent", false)))
 		else:
 			if kind == "server": menu._button(BASE + 6, I18n.t("Test and save"), Vector2(0.3, -0.51), Vector2(0.4, 0.07), enabled, "", true)
 			else:

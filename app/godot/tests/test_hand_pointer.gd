@@ -227,9 +227,45 @@ func _run() -> void:
 			main._update_menu_pointer("right_hand")
 	check(picks == initial_picks + 1 and other.provider == "hand_profile", "Runtime hand interaction aim/select dispatch also selects exactly once")
 	tracker.has_tracking_data = false
+	if not library.visible: library.toggle()
+	initial_picks = picks
+	for pinch in [false, true, false]:
+		action_hand.set_input("trigger_click", pinch)
+		for frame in 2:
+			main._update_hand_input(1.0 / 72)
+			main._update_menu_pointer("right_hand")
+	check(picks == initial_picks + 1 and other.ray != null, "Tracked runtime aim/select remains usable without skeletal tracking")
+	action_hand.invalidate_pose("aim")
 	main._update_hand_input(1.0 / 72)
-	check(other.ray == null and not main._controller_allowed("right_hand"), "Hand action profile with lost optical tracking cannot become controller input")
+	check(other.ray == null and not main._controller_allowed("right_hand"), "Lost runtime aim cancels input without falling back to an emulated controller")
 	XRServer.remove_tracker(action_hand)
+	# Exercise physical PICO and core fallback controllers through the actual node signals.
+	var controller_node := XRController3D.new()
+	controller_node.tracker = "right_hand"
+	controller_node.pose = "aim"
+	controller_node.button_pressed.connect(main._on_controller_button.bind("right_hand"))
+	controller_node.button_released.connect(main._on_controller_release.bind("right_hand"))
+	main.xr_origin.add_child(controller_node)
+	main.right_controller = controller_node
+	for profile in ["/interaction_profiles/bytedance/pico4_controller", "/interaction_profiles/bytedance/pico_neo3_controller",
+		"/interaction_profiles/bytedance/pico4s_controller", Hand.SIMPLE_PROFILE]:
+		var physical := make_action_hand(profile)
+		physical.set_pose("aim", native_pose, Vector3.ZERO, Vector3.ZERO, XRPose.XR_TRACKING_CONFIDENCE_HIGH)
+		XRServer.add_tracker(physical)
+		await process_frame
+		main._update_hand_input(1.0 / 72)
+		check(main._controller_allowed("right_hand") and main._ray("right_hand") != null, "Physical controller retains its aim ray: " + profile)
+		if not library.visible: library.toggle()
+		initial_picks = picks
+		physical.set_input("trigger_click", true)
+		physical.set_input("trigger_click", false)
+		check(picks == initial_picks + 1, "Physical controller trigger selects exactly once: " + profile)
+		physical.invalidate_pose("aim")
+		main._update_hand_input(1.0 / 72)
+		check(main._ray("right_hand") == null, "Lost physical aim hides its ray: " + profile)
+		XRServer.remove_tracker(physical)
+	main.right_controller = null
+	controller_node.free()
 	tracker.has_tracking_data = true
 	library.dismiss()
 	player.dismiss()

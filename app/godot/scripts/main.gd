@@ -527,8 +527,11 @@ func _update_hand_input(delta: float) -> void:
 					_meta_aim_tracker(hand), _hand_action_tracker(hand))
 				point = HandPointer.pinch_position(tracker, xr_origin.global_transform * XRServer.get_reference_frame(), XRServer.world_scale)
 			elif HandPointer.is_hand_profile(_hand_action_tracker(hand)):
-				# A hand-only action profile with missing optical tracking is not a controller.
-				sample = {"source": "hand", "provider": "hand_profile"}
+				# Action aim/select is independent of the optional hand-joint stream.
+				# Runtimes may also expose controllers through a hand interaction profile.
+				if xr_origin:
+					sample = HandPointer.runtime_sample(_hand_action_tracker(hand),
+						xr_origin.global_transform * XRServer.get_reference_frame(), XRServer.world_scale, false)
 			elif not HandPointer.is_optical(tracker):
 				var ray: Variant = _controller_ray(hand)
 				if ray != null: sample = {"source": "controller", "ray": ray}
@@ -596,8 +599,19 @@ func _hand_input_report() -> Dictionary:
 	var report := {}
 	for hand in hand_pointers:
 		var pointer: RefCounted = hand_pointers[hand]
-		report[hand] = {"source": pointer.source, "provider": pointer.provider, "tracked": pointer.ray != null, "pinching": pointer.down}
+		var action := _hand_action_tracker(hand)
+		var joints := _hand_tracker(hand)
+		report[hand] = {"source": pointer.source, "provider": pointer.provider, "tracked": pointer.ray != null, "pinching": pointer.down,
+			"profile": str(action.get_tracker_profile()) if action else "",
+			"action_aim_tracked": _input_pose_tracked(action, "aim"), "action_grip_tracked": _input_pose_tracked(action, "grip"),
+			"joint_tracking": joints != null and joints.has_tracking_data,
+			"joint_source": int(joints.hand_tracking_source) if joints else -1}
 	return report
+
+static func _input_pose_tracked(tracker: XRPositionalTracker, pose_name: String) -> bool:
+	if tracker == null or not tracker.has_pose(pose_name): return false
+	var pose := tracker.get_pose(pose_name)
+	return pose.has_tracking_data and pose.tracking_confidence != XRPose.XR_TRACKING_CONFIDENCE_NONE
 
 # --- dragging the picture -------------------------------------------------------------------
 

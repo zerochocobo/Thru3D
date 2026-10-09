@@ -11,9 +11,10 @@ const ICON := 0.036
 const FONT_SIZE := 16
 const LOW := 20
 const LOW_COLOR := Color(1.0, 0.42, 0.38)
-const POLL_MS := 5000
+const POWER_COLOR := Color(1.0, 0.76, 0.36)
+const POLL_MS := 1000
 
-## -> {"level": 0..100 or -1, "charging", "clock24"}; tests inject one, otherwise the QuestPlayer singleton.
+## -> {"level": 0..100 or -1, "charging", "plugged", "clock24"}; tests inject one, otherwise the QuestPlayer singleton.
 var status_provider: Callable
 ## -> {"hour", "minute"}; tests pin the clock.
 var clock_provider: Callable = Time.get_time_dict_from_system
@@ -55,7 +56,7 @@ func _process(_delta: float) -> void:
 	if is_visible_in_tree():
 		refresh()
 
-## Polls the battery every few seconds; the layout only changes when the text does.
+## Polls the battery once a second; redraws on clock, level or power-state changes.
 func refresh(force: bool = false) -> void:
 	var now := Time.get_ticks_msec()
 	if force or now - _polled_ms >= POLL_MS:
@@ -63,8 +64,9 @@ func refresh(force: bool = false) -> void:
 		_status = status_provider.call() if status_provider.is_valid() else {}
 	var level := int(_status.get("level", -1))
 	var charging := bool(_status.get("charging", false))
+	var plugged := bool(_status.get("plugged", charging))
 	var text := ("%d%%   " % level if level >= 0 else "") + clock_text()
-	var key := "%s|%d|%s" % [text, level, charging]
+	var key := "%s|%d|%s|%s" % [text, level, charging, plugged]
 	if key == _shown and not force:
 		return
 	_shown = key
@@ -72,11 +74,12 @@ func refresh(force: bool = false) -> void:
 	var has_battery := level >= 0
 	_battery.visible = has_battery
 	_fill.visible = has_battery and level > 0
-	_bolt.visible = has_battery and charging
+	_bolt.visible = has_battery and (charging or plugged)
+	_bolt.material_override.albedo_color = Menu.ACCENT if charging else POWER_COLOR
 	var text_width := Menu.FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, FONT_SIZE).x * _label.pixel_size
-	# The glyphs' art is narrower than their squares: battery 10/24 wide, bolt 6/24.
+	# Leave room for the larger charging glyph, including space from the battery outline.
 	var battery_slot := ICON * 0.5 if has_battery else 0.0
-	var bolt_slot := ICON * 0.36 if _bolt.visible else 0.0
+	var bolt_slot := ICON * 0.55 if _bolt.visible else 0.0
 	var gap := 0.008 if has_battery else 0.0
 	var content := battery_slot + bolt_slot + gap + text_width
 	_pill.mesh.size = Vector2(content + HEIGHT * 0.8, HEIGHT)
@@ -90,10 +93,10 @@ func refresh(force: bool = false) -> void:
 	_fill.material_override.set_shader_parameter("surface_size", _fill.mesh.size)
 	# Outline interior spans y 5.5..20.5 of 24 (top to bottom); grow upwards from the bottom.
 	_fill.position = Vector3(_battery.position.x, ICON * (0.5 - 20.5 / 24) + height / 2, 0.003)
-	var low := level <= LOW and not charging
+	var low := has_battery and level < LOW and not charging
 	var foreground := Color(0.93, 0.95, 0.98)
 	_fill.material_override.set_shader_parameter("surface_color", Menu.ACCENT if charging else (LOW_COLOR if low else foreground))
-	_battery.material_override.albedo_color = LOW_COLOR if low else foreground
+	_battery.material_override.albedo_color = Menu.ACCENT if charging else (LOW_COLOR if low else foreground)
 	_label.position = Vector3(left + battery_slot + bolt_slot + gap, 0, 0.003)
 
 func clock_text() -> String:

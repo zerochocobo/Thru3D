@@ -92,7 +92,7 @@ func _run() -> void:
 			failures.append("Flat caption angular anchor moved")
 	video.subtitle_distance = 2.0
 	if video.subtitle_distance != 2.0: failures.append("Near subtitle distance was unexpectedly clamped")
-	# Immersive: at the chosen distance below the line of sight, the same angular size.
+	# Immersive: video-local anchor, with distance controlling source angular disparity.
 	video.set_subtitle_track(9)
 	video.geometry = video.Geometry.Geometry.HALF_EQUIRECT
 	video._apply_geometry()
@@ -100,17 +100,17 @@ func _run() -> void:
 		video.subtitle_distance = distance
 		video._subtitle_poll_ms = 0
 		video._poll_subtitles()
-		var offset: Vector3 = video.caption.global_position - camera.global_position
-		if not video.caption.visible or absf(offset.length() - distance) > 0.01 or offset.y > -0.2 * distance \
-			or not is_equal_approx(video.caption.pixel_size, 0.001 * distance):
-			failures.append("VR caption at %s m: %s" % [distance, offset])
+		var parallax: float = video.material.get_shader_parameter("subtitle_parallax")
+		if not video.caption.visible or video.caption.layers != 0 or absf(parallax - 2.0 * atan(0.063 / (2.0 * distance))) > 0.00001:
+			failures.append("VR caption distance/duplicate layer mismatch")
 	for geometry in [1, 2, 3]:
 		video.geometry = geometry
 		for position in 5:
 			video.subtitle_position = position
 			video._place_caption()
-			var offset: Vector3 = video.caption.global_position - camera.global_position
-			if absf(offset.length() - video.subtitle_distance) > 0.01 or absf(offset.y / offset.length() - sin(video.SubtitleDepth.elevation(position))) > 0.001:
+			var inverse: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+			var direction := inverse.transposed() * Vector3.FORWARD
+			if absf(direction.y - sin(video.SubtitleDepth.elevation(position))) > 0.001 or absf(direction.x) > 0.001:
 				failures.append("Immersive subtitle position mismatch")
 	video.subtitle_position = video.SubtitleDepth.DEFAULT_POSITION
 	var report := {"state": "passed" if failures.is_empty() else "failed", "caption_white_pixels": visible_pixels,

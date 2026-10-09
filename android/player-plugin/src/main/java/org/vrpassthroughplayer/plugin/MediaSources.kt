@@ -39,7 +39,7 @@ internal class MediaSources(
     fun nextId(): Int = ids.incrementAndGet()
     /** Main thread: may show the media permission request. path "" lists the storage volumes. */
     fun browseLocal(id: Int, path: String) = local.browse(id, path)
-    /** Main thread: opens the system "All files access" page; false when the device has none. */
+    /** Main thread: requests legacy read access or opens settings, emitting local_access events. */
     fun grantAllFiles() = local.grantAllFiles()
     fun onPermissionResult(requestCode: Int, granted: Boolean) = local.onPermissionResult(requestCode, granted)
 
