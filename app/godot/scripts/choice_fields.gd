@@ -115,7 +115,7 @@ func _refresh_slider(target: int, value: float) -> void:
 	slider.fill.position.x = slider.left + fraction * slider.width / 2
 	slider.fill.material_override.set_shader_parameter("surface_size", slider.fill.mesh.size)
 	slider.knob.position.x = slider.left + fraction * slider.width
-	slider.label.text = ("%+.0f" % value if slider.unit == "°" and value != 0 else ("%.0f" % value if slider.unit == "°" else "%.1f" % value)) + slider.unit
+	slider.label.text = ("%.0f" % value if slider.unit == "%" else ("%+.0f" % value if slider.unit == "°" and value != 0 else ("%.0f" % value if slider.unit == "°" else "%.1f" % value))) + slider.unit
 
 func _preview_slider(point: Vector3) -> void:
 	var span: Vector3 = capture.item.span
@@ -153,7 +153,7 @@ func finish() -> void:
 	var header: String = str(popup.get("heading", ""))
 	var footer: String = str(popup.get("footer", ""))
 	var header_height := 0.065 if not header.is_empty() else 0.0
-	var footer_height := 0.085 if not footer.is_empty() else 0.0
+	var footer_height := (0.085 + 0.035 * footer.count("\n")) if not footer.is_empty() else 0.0
 	var width := float(popup.get("width", 0.72))
 	var height := count * PITCH + 0.055 + header_height + footer_height
 	var top := anchor.y - 0.04
@@ -175,7 +175,7 @@ func finish() -> void:
 		(node.get_child(0) as Label3D).render_priority = 32
 		menu._tips[target] = menu.I18n.t(str(option.get("hint", "")))
 	if not footer.is_empty():
-		var hint: Label3D = menu._label(menu.I18n.t(footer), Vector3(x, top-height + 0.045, 0.039), 16)
+		var hint: Label3D = menu._label(menu.I18n.t(footer), Vector3(x, top-height + footer_height / 2, 0.039), 16)
 		hint.modulate = menu.MUTED; hint.render_priority = 32
 	if options.size() > capacity:
 		_button({"kind": "scroll", "step": -1}, "↑", Vector2(x-width/2+0.07, top-height+footer_height+0.016), Vector2(0.07, 0.03))

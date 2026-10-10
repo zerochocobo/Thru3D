@@ -1,0 +1,15 @@
+{
+  "base_ffmpeg_revision": "094a2f8a2a5e7fa64736e067de224ce28fdf5979",
+  "base_archive_sha256": "3633c09eb65cba9864fe4ca1eff75ca1423174869e423e5fe9d8fce028fcf66a",
+  "base_files_sha256": {
+    "libavcodec/mediacodecdec.c": "71abf0d427cd4af308490978cba7b66d2532c49c329635a3eeeb740b0d77eb16",
+    "configure": "10cd7c275b2aed339ec5e72d984f4a538c95e0f9acc2f4d3328668c4039f844e"
+  },
+  "patched_files_sha256": {
+    "libavcodec/mediacodecdec.c": "5e6011fcee888fb77cc43478bead9a5fedd9f627d599579b700baae4151a20a4",
+    "configure": "2c215a40a0bae811e325d3395b2d2a33697fd574a55945ccd9c44b3b8f88fb94",
+    "libavcodec/quest_dovi_mediacodec.h": "648af1eba65ada9f5a3d8c4d84eedeac5c301a02eaf72cea0ab28bcf0119f0c6"
+  },
+  "patch_sha256": "ac25f48b5dce159a0cdf5880500dbe13055b8b72bf03fd8763971ddd0367ad3a",
+  "scope": "HEVC MediaCodec Dolby Vision Profile 5 RPU only; other profiles unchanged"
+}

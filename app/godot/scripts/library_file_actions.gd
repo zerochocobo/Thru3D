@@ -39,7 +39,15 @@ func folder() -> bool:
 		(menu.section == menu.Section.CLOUD and not menu._cloud_stack.is_empty() and menu.cloud_accounts.mode.is_empty())
 
 func order() -> String:
-	return Order.normalize(orders.get(scope(), "name_asc"))
+	var value := Order.normalize(orders.get(scope(), "name_asc"))
+	return value if supports_order(value) else "name_asc"
+
+func sortable() -> bool:
+	return folder() or (menu.section == menu.Section.DLNA and not menu._dlna_server.is_empty())
+
+func supports_order(value: String) -> bool:
+	if menu.section == menu.Section.DLNA: return value in ["name_asc", "name_desc"]
+	return value in Order.ORDERS and (value != "source" or menu.section == menu.Section.CLOUD)
 
 func load(value: Dictionary) -> void:
 	orders = value.duplicate(true)
@@ -82,11 +90,11 @@ func select(row: Dictionary) -> bool:
 	return true
 
 func sort_rows() -> void:
-	if not folder() or menu.section == menu.Section.CLOUD: return
+	if not sortable() or menu.section == menu.Section.CLOUD: return
 	menu.rows.sort_custom(func(a, b): return Order.before(a, b, order()))
 
 func choose_order(value: String) -> void:
-	if value == "source" and menu.section != menu.Section.CLOUD: return
+	if not sortable() or not supports_order(value): return
 	if menu.section == menu.Section.CLOUD:
 		if not menu.PlatformMethods.supports(menu.platform, "media_cloud_sorted_page"): return
 		cloud_requested_order = value
@@ -125,7 +133,7 @@ func action(id: int) -> bool:
 		elif modal == "delete" and id == CONFIRM and enabled and pending == 0 and not uncertain and (not target.get("folder", false) or plan_ready): dispatch(false)
 		elif id == CHECK_STATUS and uncertain and pending == 0: dispatch(true)
 		return true # Modal gaps and stale targets cannot reach the browser.
-	if id == SORT and folder() and not editing:
+	if id == SORT and sortable() and not editing:
 		modal = "sort"; menu.refresh(); return true
 	if id == EDIT_MODE and enabled and folder():
 		editing = not editing; selected = ""; menu.refresh(); return true
@@ -196,10 +204,10 @@ func receive(id: int, payload: String) -> bool:
 	return true
 
 func draw_header() -> void:
-	if not folder(): return
+	if not sortable(): return
 	menu._button(SORT, "", Vector2(0.25, 0.46), Vector2(0.09, 0.07), not editing and not menu._cloud_busy, "sort")
 	menu._tips[SORT] = menu.I18n.t("Sort")
-	if enabled:
+	if enabled and folder():
 		menu._button(EDIT_MODE, "", Vector2(0.36, 0.46), Vector2(0.09, 0.07), pending == 0, "check" if editing else "select", editing)
 		menu._tips[EDIT_MODE] = menu.I18n.t("Done" if editing else "Edit files")
 
@@ -219,16 +227,17 @@ func pending_text() -> String:
 
 func draw_modal() -> void:
 	if modal == "rename": rename.draw(); return
-	menu._set_backdrop(Vector2(1.12, 0.86), Vector2(0.13, 0))
-	menu._label(menu.I18n.t("Sort" if modal == "sort" else "Delete folder" if target.get("folder", false) else "Delete file"), Vector3(0.13, 0.34, 0.004), 25)
+	var names_only: bool = modal == "sort" and menu.section == menu.Section.DLNA
+	menu._set_backdrop(Vector2(1.12, 0.46 if names_only else 0.86), Vector2(0.13, 0))
+	menu._label(menu.I18n.t("Sort" if modal == "sort" else "Delete folder" if target.get("folder", false) else "Delete file"), Vector3(0.13, 0.14 if names_only else 0.34, 0.004), 25)
 	if modal == "sort":
 		for i in Order.ORDERS.size():
-			if Order.ORDERS[i] == "source" and menu.section != menu.Section.CLOUD: continue
+			if not supports_order(Order.ORDERS[i]): continue
 			var field: String = Order.ORDERS[i].get_slice("_", 0)
-			var enabled: bool = field in ["name", "source"] or menu.rows.any(func(row): return row.has("uri") and int(row.get(field, -1)) >= 0)
+			var enabled: bool = field in ["name", "source"] or menu.rows.any(func(row): return (field == "modified" or row.has("uri")) and int(row.get(field, -1)) >= 0)
 			if menu.section == menu.Section.CLOUD: enabled = enabled and menu.PlatformMethods.supports(menu.platform, "media_cloud_sorted_page")
-			menu._button(ORDER_BASE + i, menu.I18n.t(Order.LABELS[i]), Vector2(-0.12 + (i % 2) * 0.50, 0.19 - (i / 2) * 0.135), Vector2(0.46, 0.095), enabled, "", order() == Order.ORDERS[i])
-		menu._button(CANCEL, menu.I18n.t("Close"), Vector2(0.13, -0.32), Vector2(0.38, 0.08))
+			menu._button(ORDER_BASE + i, menu.I18n.t(Order.LABELS[i]), Vector2(-0.12 + (i % 2) * 0.50, 0.01 if names_only else 0.19 - (i / 2) * 0.135), Vector2(0.46, 0.095), enabled, "", order() == Order.ORDERS[i])
+		menu._button(CANCEL, menu.I18n.t("Close"), Vector2(0.13, -0.13 if names_only else -0.32), Vector2(0.38, 0.08))
 	else:
 		var title: Label3D = menu._label(menu._fit_title(str(target.get("title", "")), "", 0.96, 22), Vector3(0.13, 0.21, 0.004), 22)
 		title.modulate = menu.ACCENT

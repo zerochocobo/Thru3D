@@ -380,7 +380,7 @@ if ($LASTEXITCODE -ne 0) { throw 'APK MPV audio method inspection failed.' }
 $audioMethod = Get-Content (Join-Path $logDirectory 'mpv-audio-plugin-method.log') -Raw
 if (-not $audioMethod.Contains('.method public final set_mpv_audio(IIDZ)Z') -or -not $audioMethod.Contains('.annotation runtime Lorg/godotengine/godot/plugin/UsedByGodot;') -or -not $audioMethod.Contains('MpvVideoBridge;->setAudio(IIDZ)Z')) { throw 'APK MPV audio method/Godot annotation differs.' }
 & "$workspace\tools\Verify-MpvCandidate.ps1" -ToolRoot $ToolRoot -Candidate $MpvCandidate -ApkPath $apkPath
-foreach ($binding in @(@('set_mpv_subtitle(II)Z', 'setSubtitle(II)Z'), @('get_mpv_subtitles(IJ)Ljava/lang/String;', 'subtitles(IJ)Ljava/lang/String;'))) {
+foreach ($binding in @(@('set_mpv_subtitle(II)Z', 'setSubtitle(II)Z'), @('get_mpv_subtitles(IJ)Ljava/lang/String;', 'subtitles(IJ)Ljava/lang/String;'), @('get_mpv_subtitle_bitmap(IJ)[B', 'subtitleBitmap(IJ)[B'))) {
     $methodName = $binding[0].Split('(')[0]
     $methodLog = Join-Path $logDirectory ($methodName + '-dex.log')
     & "$env:ANDROID_HOME\cmdline-tools\latest\bin\apkanalyzer.bat" dex code --class org.vrpassthroughplayer.plugin.QuestPlayerPlugin --method $binding[0] $apkPath 2>&1 | Out-File $methodLog -Encoding utf8
@@ -430,7 +430,7 @@ $buildManifest = [ordered]@{
     calibration_fixture_sha256 = $fixtureHash
     media_dex_inspection = 'passed'
     subtitle_implemented = $true
-    subtitle_scope = 'Embedded text subtitles as independent Godot Label3D; MPV playback clock; bitmap/full ASS styling pending'
+    subtitle_scope = 'Text subtitles in independent flat/immersive Godot layers; PGS bitmap overlay on flat video only; MPV playback clock; full ASS styling pending'
     subtitle_dex_inspection = 'passed'
     subtitle_device_validation = 'not_verified'
     file_mode_memory_implemented = $true

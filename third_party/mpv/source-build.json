@@ -5,11 +5,14 @@
   "source_lock_sha256": "7036a7bf793e00607d7b65f3c4c98428a3004d3584423116d91fe0b4c22273cd",
   "builder_revision": "fdf74f6830c47dbaa8a22ac79726e8303f1db5af",
   "mpv_revision": "0b7ed670f7c353dd3dd4f8ae0fc788a181a15aa6",
-  "patch_sha256": "779ca6960a252f4cf935e405dff5b958a7153815eb5f5eec2dda95dade6ed259",
-  "private_header_sha256": "6bd201be6ded204bec0fa5811cb441e8beb902a72b83f8f29ecbbc2ddb156455",
-  "api_version": 1,
+  "patch_sha256": "1bda3569dca1920897f3fe645e5e6f16a93037474e917a17708e8ff627139cf3",
+  "private_header_sha256": "0e74daa61c9f083dfaf4a0ea21f969b305e4b104f76d73b572a2ca2b25ce8e0c",
+  "api_version": 2,
   "ndk": "30.0.16248370",
   "android_api": 23,
+  "pgs_bitmap_patch_sha256": "f06d65da2e03399714b132541b6359bea7924cb23f049e440a0dfdb51c3dcb03",
+  "pgs_bitmap_header_sha256": "59ef1fa297fabe7a43ef77682f62479341117fd26b1c8c7211de2ffab34c79cb",
+  "dovi_rpu_patch_sha256": "ac25f48b5dce159a0cdf5880500dbe13055b8b72bf03fd8763971ddd0367ad3a",
   "architecture": "arm64-v8a",
   "elf_page_alignment": 16384,
   "build_command": "buildall.sh --arch arm64 mpv",
@@ -49,9 +52,9 @@
   "libraries": [
     {
       "name": "libmpv.so",
-      "sha256": "390c9deee74be927b4342655308e1d1094d46247ebe7273eb989ecf73e014bd6",
-      "bytes": 8257976,
-      "built_sha256": "db725097b11a70b881b3e718ea2c7d2370eb44e834898eab150247698e787240",
+      "sha256": "0004c41c360cd7eafd4c1a5ee330803ae449f1156d9ef3fdea40824d72f0475b",
+      "bytes": 8261384,
+      "built_sha256": "558a9e9e4594d4aef5e7d5a943b579da586931f9723a653ca0ce81910262e254",
       "needed": [
         "libm.so",
         "libz.so",
@@ -72,9 +75,9 @@
     },
     {
       "name": "libavcodec.so",
-      "sha256": "680d5f603915d9969748f559dcaf620a4f54ecd99ff90bb3bdfd4c848dbcd0e0",
-      "bytes": 12392912,
-      "built_sha256": "0d227f0cec3ace5cc52e073e1210cf6ab62bdda7afbf889456e902a2454e86ec",
+      "sha256": "28ba89fd0ce15c93bca2347bca43fda4321209e803a8a08fc99057c5c5b6d9d2",
+      "bytes": 12394320,
+      "built_sha256": "edcb57a471c3e0f900c5f0550ff930f113142e26aa1d8c2e3ce3c53bb9444d9e",
       "needed": [
         "libswresample.so",
         "libavutil.so",
@@ -88,9 +91,9 @@
     },
     {
       "name": "libavdevice.so",
-      "sha256": "82e383a5f9e92287e02c94c3271601c307ff229727e3179e0859623cb885da63",
+      "sha256": "ba250301a6dc6724d5bfbf888beaeb0d9dde9bd4664a6e8176d12bf713163c44",
       "bytes": 9216,
-      "built_sha256": "2c86fdd3d371e450568b40a324e725a4a5a515b220526867bd2216153ef270dd",
+      "built_sha256": "d408006fff832b1ef3984302f9daed192924e9bef61e7796944708c0d1567d2e",
       "needed": [
         "libavformat.so",
         "libavutil.so",
@@ -99,9 +102,9 @@
     },
     {
       "name": "libavfilter.so",
-      "sha256": "ce71bb55814128fefa8ec56cc6c93118cbdd2d24e15453165eb9eaf4b5415df0",
-      "bytes": 4300432,
-      "built_sha256": "c0703d1fa4204efaaa09cbd75f8185e89b7c0beca0550ef877aed64522242d64",
+      "sha256": "9960677b40ca15c3c19620322e6b4aa34cff3b5632bedfc024e7fbb4f2d2524f",
+      "bytes": 4300576,
+      "built_sha256": "c7c468e98469a4dabaadc17d9ccf4670bb7fa3826ab8e56a8a478cf7461dcb17",
       "needed": [
         "libswscale.so",
         "libavformat.so",
@@ -114,9 +117,9 @@
     },
     {
       "name": "libavformat.so",
-      "sha256": "fe931de38cc47f4958bba86a77eefa2904aff9a7c4dfab1862b6af0174b58684",
-      "bytes": 3382392,
-      "built_sha256": "7536392291cbb1472edab6f27b9c4cbd3f575a5c26c8a44900b9884dca4ab653",
+      "sha256": "e2bb1f997701a503f73c399aebbe12228dfbbcb899aea949195aa90e87418016",
+      "bytes": 4022832,
+      "built_sha256": "5224d635a81e14edab762ee06d79b0a2102b1add9c66bed8a7d8a73b8deda8a8",
       "needed": [
         "libavcodec.so",
         "libavutil.so",
@@ -127,9 +130,9 @@
     },
     {
       "name": "libavutil.so",
-      "sha256": "01876df30ccdc2a3a6007ed97ca1de6b61337b14ad311ecb99f2248ee742591d",
-      "bytes": 740344,
-      "built_sha256": "25917950dc915cef27d2b9790cfc447755f8bcaac04c25b093a7298b8f21f456",
+      "sha256": "18450ee7ce7099ea4638b2622bc30c495e3d1089b89492410204dc10f5b67f30",
+      "bytes": 740376,
+      "built_sha256": "da82fd86ce2a96d97be3f737a6d1d321de08bb0dc4407b61bd68f16ac670ea5e",
       "needed": [
         "libm.so",
         "libandroid.so",
@@ -139,9 +142,9 @@
     },
     {
       "name": "libswresample.so",
-      "sha256": "d754f75f183b4f7289060fe7ea1ec59f6441316cadbd9b8e4ba097d9021b2257",
+      "sha256": "a891bfebf8dbf4ccb2c6f5907c784aad086f5ec1d7c5e452806310ad6cbeddcb",
       "bytes": 100688,
-      "built_sha256": "6e64c4d718c31b8faa3825cbb7987c4ba775c9537349f4dd561231a97d4fd5e5",
+      "built_sha256": "13fff00d733af3e85b5af0c0d526dcbd9bb095fba4b3eedac590766355ac93f7",
       "needed": [
         "libavutil.so",
         "libm.so",
@@ -150,9 +153,9 @@
     },
     {
       "name": "libswscale.so",
-      "sha256": "41d37eeaaf9405912d433b96fa5f4bdb330a924cddb925e537bed957ff6a3cd6",
-      "bytes": 1246632,
-      "built_sha256": "a7c62eabf21fcad4bd00d6df07c1bc9c37555e7e80bc875a9f26c96bf1e0c293",
+      "sha256": "3e43471587732fcdef16d01724ed427cb1110decbe06e666de6cf7b13f74f8d5",
+      "bytes": 1246664,
+      "built_sha256": "db8333286787e4092151edd3bccec2d980d35c7ecb792394cdf74709ea5bf3a1",
       "needed": [
         "libavutil.so",
         "libm.so",
@@ -161,7 +164,7 @@
     }
   ],
   "host_packages_sha256": "0d42dd4ec021254111a439214a2681bf37ca44ba2af04a9d97af479f2bd1dd33",
-  "build_receipt_sha256": "d5dd5d1769928bc0c960d6d3402830fa399f18c8279b97ded17e8bac9848a732",
+  "build_receipt_sha256": "0b01a1952d42a7b27b3d12027523710be59bc5f4ae7a5ee847b25d1734a2cabd",
   "meson": "1.11.0",
   "ninja": "1.11.1",
   "cxx_runtime_policy": "Use the existing Godot/project libc++_shared; do not package a duplicate; device compatibility pending",

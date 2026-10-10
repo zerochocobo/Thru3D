@@ -2,8 +2,10 @@ package org.vrpassthroughplayer.plugin
 
 import org.json.JSONArray
 import org.json.JSONObject
+import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.HttpURLConnection
 import java.net.InetAddress
@@ -118,13 +120,52 @@ internal object DlnaClient {
         return null
     }
 
-    /** One level of a container: containers first, then playable video items. */
+    const val MAX_BROWSE_ITEMS = 20_000
+    private const val BROWSE_PAGE_SIZE = 1000
+    private const val MAX_BROWSE_BYTES = 8 * 1024 * 1024
+    private data class BrowsePage(val entries: JSONArray, val ids: List<String>, val total: Int?, val update: String?)
+
+    /** Read the complete level before client-side name sorting. Offsets include unsupported items. */
     fun browse(server: Server, objectId: String, metadata: Boolean = false): JSONArray {
+        val deadline = System.nanoTime() + 60_000_000_000L
+        if (metadata) return browsePage(server, objectId, 0, true, deadline).entries
+        val entries = JSONArray()
+        val seen = HashSet<String>()
+        var offset = 0
+        var total: Int? = null
+        var update: String? = null
+        while (true) {
+            check(!Thread.currentThread().isInterrupted && System.nanoTime() < deadline) { "DLNA server unavailable" }
+            val page = browsePage(server, objectId, offset, false, deadline)
+            page.total?.let {
+                check(total == null || total == it) { "DLNA server unavailable" }
+                total = it
+            }
+            page.update?.let {
+                check(update == null || update == it) { "DLNA server unavailable" }
+                update = it
+            }
+            check((total ?: 0) <= MAX_BROWSE_ITEMS && offset + page.ids.size <= MAX_BROWSE_ITEMS) { "Folder too large to sort" }
+            // Repeated pages or a changing directory must not produce a partly sorted listing.
+            check(page.ids.all { it.isNotBlank() && seen.add(it) }) { "DLNA server unavailable" }
+            offset += page.ids.size
+            check(total == null || offset <= total!!) { "DLNA server unavailable" }
+            for (i in 0 until page.entries.length()) entries.put(page.entries.getJSONObject(i))
+            if (total != null && offset == total) return entries
+            if (page.ids.isEmpty()) {
+                check(total == null) { "DLNA server unavailable" }
+                return entries
+            }
+            // Servers can impose a lower page size, so a short page is not an end marker.
+        }
+    }
+
+    private fun browsePage(server: Server, objectId: String, offset: Int, metadata: Boolean, deadline: Long): BrowsePage {
         val body = """<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 <s:Body><u:Browse xmlns:u="${server.serviceType}"><ObjectID>${escape(objectId)}</ObjectID>
-<BrowseFlag>${if (metadata) "BrowseMetadata" else "BrowseDirectChildren"}</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex>
-<RequestedCount>1000</RequestedCount><SortCriteria></SortCriteria></u:Browse></s:Body></s:Envelope>"""
+<BrowseFlag>${if (metadata) "BrowseMetadata" else "BrowseDirectChildren"}</BrowseFlag><Filter>*</Filter><StartingIndex>$offset</StartingIndex>
+<RequestedCount>$BROWSE_PAGE_SIZE</RequestedCount><SortCriteria></SortCriteria></u:Browse></s:Body></s:Envelope>"""
         val connection = URL(server.controlUrl).openConnection() as HttpURLConnection
         connection.connectTimeout = 5000; connection.readTimeout = 15000
         connection.requestMethod = "POST"; connection.doOutput = true
@@ -132,15 +173,40 @@ internal object DlnaClient {
         connection.setRequestProperty("SOAPACTION", "\"${server.serviceType}#Browse\"")
         try {
             connection.outputStream.use { it.write(body.toByteArray()) }
-            val response = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            val result = parse(response).getElementsByTagNameNS("*", "Result").item(0)?.textContent ?: return JSONArray()
-            return didl(result, server.location)
+            val response = connection.inputStream.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    check(!Thread.currentThread().isInterrupted && System.nanoTime() < deadline) { "DLNA server unavailable" }
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    check(output.size() + count <= MAX_BROWSE_BYTES) { "Folder too large to sort" }
+                    output.write(buffer, 0, count)
+                }
+                output.toString(Charsets.UTF_8.name())
+            }
+            check(System.nanoTime() < deadline) { "DLNA server unavailable" }
+            val envelope = parse(response)
+            fun value(name: String) = envelope.getElementsByTagNameNS("*", name).item(0)?.textContent?.trim()
+            fun count(name: String): Int? = value(name)?.let { text ->
+                text.toIntOrNull()?.takeIf { it >= 0 } ?: error("DLNA server unavailable")
+            }
+            val result = value("Result") ?: error("DLNA server unavailable")
+            val doc = result.takeIf { it.isNotEmpty() }?.let(::parse)
+            val ids = ArrayList<String>()
+            for (tag in listOf("container", "item")) {
+                val nodes = doc?.getElementsByTagNameNS("*", tag) ?: continue
+                for (i in 0 until nodes.length) ids.add((nodes.item(i) as Element).getAttribute("id"))
+            }
+            check(count("NumberReturned")?.let { it == ids.size } != false) { "DLNA server unavailable" }
+            return BrowsePage(doc?.let { didl(it, server.location) } ?: JSONArray(), ids, count("TotalMatches"), value("UpdateID"))
         } finally { connection.disconnect() }
     }
 
     /** DIDL-Lite -> entries {id, title, container, uri?, size?, duration_ms?, width?, height?}. */
-    fun didl(xml: String, base: String = ""): JSONArray {
-        val doc = parse(xml)
+    fun didl(xml: String, base: String = ""): JSONArray = didl(parse(xml), base)
+
+    private fun didl(doc: Document, base: String): JSONArray {
         val out = JSONArray()
         val containers = doc.getElementsByTagNameNS("*", "container")
         for (i in 0 until containers.length) {

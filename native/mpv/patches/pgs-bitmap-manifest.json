@@ -1,0 +1,13 @@
+{
+  "api_version": 1,
+  "base_archive_sha256": "d84b3c706592558bfba8e6305d00f86406c647c3b8b317236433e25caf4d9d91",
+  "base_files_sha256": {
+    "player/client.c": "56ed96e2b5d9131d4ac89d29e12c87ea9a34ef9018f0df46a735fa332d5f6e63"
+  },
+  "patched_files_sha256": {
+    "player/client.c": "eec20f0a4c38458560669d6a440f9ebe4c0998e29d55942bf163afb355ec283b",
+    "include/mpv/quest_subtitle.h": "59ef1fa297fabe7a43ef77682f62479341117fd26b1c8c7211de2ffab34c79cb"
+  },
+  "patch_sha256": "f06d65da2e03399714b132541b6359bea7924cb23f049e440a0dfdb51c3dcb03",
+  "private_header_sha256": "59ef1fa297fabe7a43ef77682f62479341117fd26b1c8c7211de2ffab34c79cb"
+}

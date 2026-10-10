@@ -62,7 +62,7 @@ def check_files(files):
                         errors.append(f'{gltf}: unexpected hand buffer reference')
                 except (ValueError, KeyError, TypeError):
                     errors.append(f'{gltf}: invalid hand buffer contract')
-    required = {'LICENSE', 'README.md', 'docs/BUILD.md', 'docs/MODELS.md', 'docs/LICENSING.md',
+    required = {'LICENSE', 'README.md', 'CHANGELOG.md', 'CHANGELOG.zh-CN.md', 'docs/BUILD.md', 'docs/MODELS.md', 'docs/LICENSING.md',
                 'app/godot/project.godot', 'android/player-plugin/build.gradle', 'native/mpv/CMakeLists.txt'}
     errors.extend(f'{name}: required public file missing' for name in sorted(required - files.keys()))
     if 'LICENSE' in files and b'Version 3, 29 June 2007' not in files['LICENSE']:

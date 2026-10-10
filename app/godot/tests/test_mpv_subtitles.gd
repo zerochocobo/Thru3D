@@ -63,6 +63,31 @@ func _initialize() -> void:
 		check(State.text_codec(codec), "CC accepts common text codec " + codec)
 	for codec in ["hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", ""]:
 		check(not State.text_codec(codec), "CC excludes bitmap/unknown codec " + codec)
+	check(State.supported_codec("hdmv_pgs_subtitle", true, true), "Flat video offers decoded PGS")
+	check(not State.supported_codec("hdmv_pgs_subtitle", false, true), "VR hides PGS")
+	check(not State.supported_codec("hdmv_pgs_subtitle", true, false), "Old native library cannot advertise PGS")
+	check(State.supported_codec("ass", false, false), "VR retains text control without the PGS extension")
+	state.select(9)
+	state.clear(true)
+	var pgs := sample.duplicate(true)
+	pgs.text = ""
+	pgs.start_seconds = ""
+	pgs.end_seconds = ""
+	pgs.bitmap = {"visible": true, "version": 2, "x": 10, "y": 80, "width": 50, "height": 10, "canvas_width": 100, "canvas_height": 100}
+	check(state.observe(pgs, 7, pair) and not state.bitmap.is_empty() and state.text.is_empty(), "PGS uses native active-cue status even without a known end time")
+	for mutation in [{"generation": 2}, {"source_epoch": 1}, {"command_id": 3}, {"track_id": "8"}, {"age_ms": 1001}, {"timeline_valid": false}]:
+		state.clear(true)
+		var bad := pgs.duplicate(true)
+		bad.merge(mutation, true)
+		check(state.observe(bad, 7, pair) and state.bitmap.is_empty(), "PGS rejects stale state " + str(mutation))
+	state.clear(true)
+	var gap := pgs.duplicate(true)
+	gap.bitmap.visible = false
+	check(state.observe(gap, 7, pair) and state.bitmap.is_empty(), "PGS gap clears the old crop")
+	state.clear(true)
+	var overflow := pgs.duplicate(true)
+	overflow.bitmap.width = 101
+	check(state.observe(overflow, 7, pair) and state.bitmap.is_empty(), "PGS crop must fit its canvas")
 	var video := Video.new()
 	var host := Host.new()
 	video.platform = host
@@ -75,6 +100,16 @@ func _initialize() -> void:
 	check(video.cycle_subtitle_track() and host.calls.back() == [7, 0], "Cycle includes subtitles off")
 	check(video.cycle_subtitle_track(-1) and host.calls.back() == [7, 12], "Reverse cycle uses real ids")
 	check(video.media.session_id == 7 and video.media.generation == 3, "Selecting subtitles preserves RVM/video processing generation")
+	video.media.playback.details.pgs_supported = true
+	check(video.subtitle_tracks().size() == 3, "Flat subtitle list includes PGS and both text tracks")
+	check(video.set_subtitle_track(5) and host.calls.back() == [7, 5], "Flat PGS selection uses its actual MPV id")
+	for mode in [1, 2, 3]:
+		video.geometry = mode
+		check(video.subtitle_tracks().size() == 2, "Immersive subtitle list hides PGS in mode " + str(mode))
+		var before := host.calls.size()
+		check(not video.set_subtitle_track(5) and host.calls.size() == before, "Stale PGS menu selection cannot reach native in VR")
+	video.geometry = 0
+	check(video.set_subtitle_track(12), "Restore selected text track for remaining controls")
 	host.accepted = false
 	check(not video.set_subtitle_track(9) and video.subtitles.requested_track == 12, "Rejected native choice preserves desired track")
 	var count := host.calls.size()

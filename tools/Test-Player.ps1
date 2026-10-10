@@ -81,6 +81,8 @@ if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'dlna-menu-hos
 if ($LASTEXITCODE -ne 0) { throw 'Library menu host regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_library_file_actions.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'library-file-actions-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'library-file-actions-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Library editing and directory sorting regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_library_sort.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'library-sort-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'library-sort-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Folder modification time and DLNA name sorting regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_file_editing_memory.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'file-editing-memory-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'file-editing-memory-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Renamed history and bookmarks regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_local_storage.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'local-storage-host.log')
@@ -97,8 +99,12 @@ if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'media-server-
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'cloud-accounts-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Cloud account management regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_account_panel.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'in-app-accounts-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'in-app-accounts-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'In-app account UI regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_plex_accounts.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'plex-accounts-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'plex-accounts-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Plex account UI regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_media_naming.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'media-naming-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Media naming host regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_playback_settings.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'playback-settings-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'playback-settings-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Playback settings regression failed.' }
 # Alpha-packed fisheye files decoded by the MPV pair shader (desktop OpenGL).
 & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 1800 --script res://tests/render_packed_alpha_pair.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'packed-alpha-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Packed alpha render regression failed.' }

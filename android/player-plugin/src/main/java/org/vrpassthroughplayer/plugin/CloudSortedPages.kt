@@ -42,7 +42,7 @@ internal class CloudSortedPages(private val now: () -> Long = { System.nanoTime(
         fun comparator(order: String): Comparator<CloudFile> = Comparator { a, b ->
             if (a.folder != b.folder) return@Comparator if (a.folder) -1 else 1
             val field = order.substringBefore('_')
-            if (!a.folder && field != "name") {
+            if (field == "modified" || (field == "size" && !a.folder)) {
                 val av = if (field == "size") a.size else a.modified
                 val bv = if (field == "size") b.size else b.modified
                 if ((av < 0) != (bv < 0)) return@Comparator if (av < 0) 1 else -1

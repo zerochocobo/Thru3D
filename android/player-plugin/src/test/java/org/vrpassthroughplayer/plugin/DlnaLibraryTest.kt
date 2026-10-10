@@ -10,7 +10,9 @@ class DlnaLibraryTest {
     private fun xml(body: String) = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:s="http://www.sec.co.kr/" xmlns:p="http://www.pv.com/pvns/">$body</DIDL-Lite>"""
     private fun item(body: String) = """<item id="v_1"><dc:title>Movie</dc:title>$body</item>"""
     private fun escape(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    private fun soap(didl: String) = """<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:BrowseResponse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1"><u:Result>${escape(didl)}</u:Result></u:BrowseResponse></s:Body></s:Envelope>"""
+    private fun soap(didl: String, total: Int = Regex("<(?:item|container) ").findAll(didl).count(), update: Int = 1,
+        returned: Int = Regex("<(?:item|container) ").findAll(didl).count()) =
+        """<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:BrowseResponse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1"><u:Result>${escape(didl)}</u:Result><NumberReturned>$returned</NumberReturned><TotalMatches>$total</TotalMatches><UpdateID>$update</UpdateID></u:BrowseResponse></s:Body></s:Envelope>"""
     private val description = """<root><device><friendlyName>PT server</friendlyName><UDN>uuid:pt</UDN><serviceList><service><serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType><controlURL>/control/cds</controlURL></service></serviceList></device></root>"""
 
     @Test fun manualLocationsValidateAndPreserveExplicitProxyPath() {
@@ -224,6 +226,89 @@ class DlnaLibraryTest {
             assertEquals("$endpoint/0.srt", library.subtitles(video).single().url.toString())
             val restored = DlnaLibrary({ state }, {})
             assertEquals("$endpoint/0.srt", restored.subtitles(video).single().url.toString())
+        }
+    }
+
+    @Test fun completeBrowseIncludesLaterPagesAndOffsetsCountUnsupportedItems() {
+        val offsets = mutableListOf<Int>()
+        MediaServerClientTest.Fixture { _, _, body ->
+            assertTrue(body.contains("<SortCriteria></SortCriteria>")) // Works without server sort capabilities.
+            val offset = Regex("<StartingIndex>([0-9]+)</StartingIndex>").find(body)!!.groupValues[1].toInt()
+            offsets.add(offset)
+            val children = when (offset) {
+                0 -> """<container id="10"><dc:title>Folder10</dc:title></container><item id="audio"><dc:title>Audio</dc:title><res protocolInfo="http-get:*:audio/mpeg:*">/a.mp3</res></item>"""
+                2 -> """<item id="video"><dc:title>Movie10</dc:title><res protocolInfo="http-get:*:video/mp4:*">/v.mp4</res></item><container id="2"><dc:title>Folder2</dc:title></container>"""
+                else -> error("Wrong offset $offset")
+            }
+            // The server caps each response to two, even though the client requested 1000.
+            MediaServerClientTest.Reply(body = soap(xml(children), total = 4).toByteArray())
+        }.use { fixture ->
+            val server = DlnaClient.Server("id", "test", fixture.url, fixture.url)
+            val entries = DlnaClient.browse(server, "0")
+            assertEquals(listOf(0, 2), offsets)
+            assertEquals(listOf("10", "2", "video"), (0 until entries.length()).map { entries.getJSONObject(it).getString("id") })
+            assertEquals(fixture.url + "/v.mp4", entries.getJSONObject(2).getString("uri"))
+        }
+    }
+
+    @Test fun serversWithoutCountsReadUntilEmptyRatherThanAssumingShortPageComplete() {
+        val offsets = mutableListOf<Int>()
+        MediaServerClientTest.Fixture { _, _, body ->
+            val offset = Regex("<StartingIndex>([0-9]+)</StartingIndex>").find(body)!!.groupValues[1].toInt()
+            offsets.add(offset)
+            val children = if (offset < 2) """<container id="$offset"><dc:title>Folder$offset</dc:title></container>""" else ""
+            val response = soap(xml(children)).replace(Regex("<(NumberReturned|TotalMatches|UpdateID)>.*?</\\1>"), "")
+            MediaServerClientTest.Reply(body = response.toByteArray())
+        }.use { fixture ->
+            assertEquals(2, DlnaClient.browse(DlnaClient.Server("id", "test", fixture.url, fixture.url), "0").length())
+            assertEquals(listOf(0, 1, 2), offsets)
+        }
+    }
+
+    @Test fun repeatedChangedIncompleteOversizedAndFailedPagesNeverReturnPartialListing() {
+        for (failure in listOf("repeat", "update", "total", "empty", "count", "oversize", "http")) {
+            val offsets = mutableListOf<Int>()
+            MediaServerClientTest.Fixture { _, _, body ->
+                val offset = Regex("<StartingIndex>([0-9]+)</StartingIndex>").find(body)!!.groupValues[1].toInt()
+                offsets.add(offset)
+                if (offset > 0 && failure == "http") MediaServerClientTest.Reply(503, body = byteArrayOf())
+                else {
+                    val children = if (offset > 0 && failure == "empty") "" else
+                        """<container id="${if (failure == "repeat") 0 else offset}"><dc:title>Folder</dc:title></container>"""
+                    MediaServerClientTest.Reply(body = soap(xml(children),
+                        total = if (failure == "oversize") 20_001 else if (offset > 0 && failure == "total") 3 else 2,
+                        update = if (offset > 0 && failure == "update") 2 else 1,
+                        returned = if (offset > 0 && failure == "count") 2 else if (children.isEmpty()) 0 else 1).toByteArray())
+                }
+            }.use { fixture ->
+                assertThrows(Exception::class.java) { DlnaClient.browse(DlnaClient.Server("id", "test", fixture.url, fixture.url), "0") }
+                assertEquals(if (failure == "oversize") listOf(0) else listOf(0, 1), offsets)
+            }
+        }
+    }
+
+    @Test fun pagedDirectoryKeepsEarlySubtitleReferencesInMemoryAndHistory() {
+        var endpoint = ""
+        var state = ""
+        val offsets = mutableListOf<Int>()
+        MediaServerClientTest.Fixture { _, _, body ->
+            val metadata = body.contains("BrowseMetadata")
+            val offset = Regex("<StartingIndex>([0-9]+)</StartingIndex>").find(body)!!.groupValues[1].toInt()
+            if (!metadata) offsets.add(offset)
+            val end = if (metadata) 1 else minOf(offset + 1000, 2100)
+            val items = (offset until end).joinToString("") { id -> """<item id="$id"><dc:title>Movie$id</dc:title><res protocolInfo="http-get:*:video/mp4:*">$endpoint/$id.mp4</res><res protocolInfo="http-get:*:text/srt:*">$endpoint/$id.srt</res></item>""" }
+            MediaServerClientTest.Reply(body = soap(xml(items), total = if (metadata) 1 else 2100).toByteArray())
+        }.use { fixture ->
+            endpoint = fixture.url
+            val server = DlnaClient.Server("id", "test", endpoint, endpoint)
+            state = JSONObject().put("servers", JSONArray().put(server.json())).toString()
+            val library = DlnaLibrary({ state }, { state = it })
+            assertEquals(2100, library.browse("id", "0").length())
+            assertEquals(listOf(0, 1000, 2000), offsets)
+            assertEquals(256, JSONObject(state).getJSONArray("references").length())
+            assertEquals("$endpoint/0.srt", library.subtitles("$endpoint/0.mp4").single().url.toString())
+            assertEquals("$endpoint/0.srt", DlnaLibrary({ state }, {}).subtitles("$endpoint/0.mp4").single().url.toString())
+            assertEquals(listOf(0, 1000, 2000), offsets) // BrowseMetadata remains a single-item request.
         }
     }
 }

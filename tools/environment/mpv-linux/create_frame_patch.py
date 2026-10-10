@@ -12,7 +12,8 @@ ARCHIVE = Path(str(Path(os.environ.get('THRU3D_TOOL_ROOT', str(Path.home() / '.c
 TARGETS = ("video/out/vo_libmpv.c", "video/out/gpu/libmpv_gpu.c",
            "video/out/gpu/video.c", "video/out/gpu/video.h",
            "video/decode/vd_lavc.c", "video/out/hwdec/hwdec_aimagereader.c", "audio/out/buffer.c",
-           "video/out/gpu/hwdec.h")
+           "video/out/gpu/hwdec.h", "video/out/gpu/shader_cache.c",
+           "video/out/gpu/shader_cache.h", "video/out/opengl/common.c")
 
 
 def replace_once(text, old, new):
@@ -267,6 +268,8 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
             driver_delay = MPMAX(0, MP_TIME_NS_TO_S(end - now));
         }
 ''')
+    from dovi_patch import apply_mpv_dovi
+    apply_mpv_dovi(edited, replace_once)
     header = (ROOT/"native/mpv/include/mpv/quest_frame.h").read_text(encoding="utf-8")
     edited["include/mpv/quest_frame.h"] = header
     output = ROOT/"native/mpv/patches/0001-quest-source-frame.patch"

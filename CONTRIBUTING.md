@@ -9,3 +9,5 @@ Do not commit model weights, generated APKs/libraries, signing material, credent
 VR menus use controller ray/trigger selection or hand interaction, never thumbstick selection. Libraries, settings, list popups and photo menus reserve thumbsticks for scrolling and suppress playback shortcuts. The ordinary video control bar allows the same seek, volume and immersive zoom shortcuts as hidden controls. Pointer capture suppresses shortcuts; after leaving a list or ending capture, the stick must return to center before reactivation. Keep visible UI text concise and place implementation notes in technical documentation.
 
 Distribution APK filenames use platform names `QUEST`, `PICO` and `OpenXR`, with the requested software version and build date. Do not use specific headset models in distribution filenames.
+
+For every version update, maintain both `CHANGELOG.md` and `CHANGELOG.zh-CN.md` with the same release coverage. Review the README feature overview: add important durable capabilities, while keeping fixes and detailed history in the changelogs. Preserve media/device limitations and use English commit messages.

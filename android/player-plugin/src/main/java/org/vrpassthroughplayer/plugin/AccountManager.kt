@@ -24,7 +24,7 @@ internal class AccountManager(private val host: () -> Activity?) {
 
     private class Session(val id: Int, val kind: String, val provider: String, val accountId: String) : AccountSessionGuard() {
         val inputs = listOf("name", "base", "username", "password", "sms").associateWith { AccountInput() }
-        var state = "form"
+        @Volatile var state = "form"
         var error = ""
         var busy = false
         var revision = 0
@@ -42,6 +42,12 @@ internal class AccountManager(private val host: () -> Activity?) {
         @Volatile var http: MediaServerHttp? = null
         @Volatile var discovery: MediaServerDiscovery? = null
         var web: InAppWebLogin? = null
+        @Volatile var plex: PlexAuth? = null
+        var plexPin: PlexAuth.Pin? = null
+        var plexExpiresAt = 0L
+        val plexClientId = UUID.randomUUID().toString()
+        var plexServers = emptyList<PlexAuth.Server>()
+        var plexToken: String? = null
         fun value(key: String) = inputs.getValue(key).text()
         fun set(key: String, text: String) { inputs.getValue(key).clear(); inputs.getValue(key).append(text) }
     }
@@ -49,7 +55,7 @@ internal class AccountManager(private val host: () -> Activity?) {
     @Synchronized fun open(kind: String, provider: String, accountId: String, raw: String): Int {
         if (closed || kind !in setOf("cloud", "server", "dav", "discover") || raw.length > 4096) return -1
         if (kind == "cloud" && provider !in CloudDrive.PROVIDERS && !(BuildConfig.DEBUG && provider in CloudDrive.TRIAL_PROVIDERS) && !(provider == CloudDrive.P115 && accountId.isNotEmpty())) return -1
-        if (kind == "server" && provider !in setOf("emby", "jellyfin", "stash", "xbvr")) return -1
+        if (kind == "server" && provider !in setOf("emby", "jellyfin", "stash", "xbvr", "plex")) return -1
         cancel(session?.id ?: 0)
         val s = Session(ids.incrementAndGet(), kind, provider, accountId)
         session = s
@@ -60,7 +66,7 @@ internal class AccountManager(private val host: () -> Activity?) {
                 s.old = if (accountId.isEmpty()) null else MediaServerStore.get(app, accountId)
                 require(s.old == null || s.old!!.provider == provider)
                 s.set("name", s.old?.name ?: data.optString("name", providerName(provider)))
-                s.set("base", s.old?.base ?: data.optString("base", "http://"))
+                s.set("base", s.old?.base ?: data.optString("base", if (provider == "plex") "" else "http://"))
                 s.set("username", s.old?.username ?: "")
             } else if (kind == "cloud") {
                 CloudLibrary.start(app)
@@ -91,9 +97,12 @@ internal class AccountManager(private val host: () -> Activity?) {
     fun snapshot(id: Int): String {
         val s = session?.takeIf { it.id == id && !it.cancelled } ?: return "{}"
         synchronized(s) {
+            val pairingExpired = s.provider == "plex" && s.state == "plex_link" && s.plexToken == null &&
+                s.plexPin != null && SystemClock.elapsedRealtime() >= s.plexExpiresAt
             val fields = JSONObject()
             for ((name, input) in s.inputs) fields.put(name, if (name in setOf("password", "sms")) "" else input.text())
-            val value = JSONObject().put("id", id).put("state", s.state).put("busy", s.busy).put("error", s.error)
+            val value = JSONObject().put("id", id).put("state", s.state).put("busy", s.busy)
+                .put("error", if (pairingExpired) "Pairing code expired" else s.error).put("pairing_expired", pairingExpired)
                 .put("revision", s.revision).put("fields", fields).put("password_length", s.inputs.getValue("password").length)
                 .put("sms_length", s.inputs.getValue("sms").length).put("sms_sent", s.smsSent)
                 .put("challenge_revision", s.challengeVersion)
@@ -170,6 +179,12 @@ internal class AccountManager(private val host: () -> Activity?) {
         task(s) {
             val app = context()
             when (action) {
+                "plex_authorize" -> { require(s.kind == "server" && s.provider == "plex"); authorizePlex(s) }
+                "plex_confirm" -> { require(s.kind == "server" && s.provider == "plex" && s.state == "plex_link"); confirmPlex(s, app) }
+                "plex_select" -> { require(s.kind == "server" && s.provider == "plex" && s.state == "plex_servers");
+                    val server = s.plexServers.firstOrNull { it.id == data.optString("server_id") } ?: throw MediaServerFailure("Video unavailable")
+                    connectPlex(s, app, server)
+                }
                 "save_server" -> { require(s.kind == "server"); saveServer(s, app) }
                 "save_webdav" -> {
                     require(s.kind == "cloud" && s.provider == CloudDrive.WEBDAV)
@@ -288,6 +303,7 @@ internal class AccountManager(private val host: () -> Activity?) {
             MediaServerAccount.address(s.value("base")), "", s.provider, old?.userId ?: "", s.value("username").trim())
         val secret = s.value("password")
         val sameLogin = old != null && old.base == candidate.base && old.username == candidate.username && secret.isEmpty()
+        if (s.provider == "plex") mediaRequire(sameLogin, "Server authentication required")
         val authenticated = if (s.provider in setOf("emby", "jellyfin")) {
             if (sameLogin) candidate.copy(key = old!!.key) else MediaServerHttp(candidate).use { http ->
                 s.http = http; check(!s.cancelled); EmbyClient(candidate, http).login(candidate.username, secret)
@@ -299,6 +315,62 @@ internal class AccountManager(private val host: () -> Activity?) {
             check(old == null || MediaServerStore.get(app, old.id) == old)
             MediaServerStore.save(app, authenticated); s.state = "done"; s.inputs.values.forEach { it.clear() }
         } }
+    }
+
+    private fun authorizePlex(s: Session) {
+        s.plex?.close()
+        s.plexToken = null; s.plexPin = null
+        val auth = PlexAuth(s.old?.id ?: s.plexClientId)
+        s.plex = auth
+        check(!s.cancelled)
+        val pin = auth.createPin()
+        commit(s) {
+            s.plexPin = pin; s.plexExpiresAt = SystemClock.elapsedRealtime() + pin.expiresIn * 1000L
+            s.plexServers = emptyList(); s.state = "plex_link"
+            s.result = JSONObject().put("code", pin.code).put("link", "plex.tv/link")
+        }
+    }
+    private fun confirmPlex(s: Session, app: Context) {
+        val auth = s.plex ?: throw MediaServerFailure("Pairing code expired")
+        val token = s.plexToken ?: run {
+            val pin = s.plexPin ?: throw MediaServerFailure("Pairing code expired")
+            mediaRequire(SystemClock.elapsedRealtime() < s.plexExpiresAt, "Pairing code expired")
+            val approved = auth.confirm(pin)
+            // Retain approval only in this native session if fetching resources needs a retry.
+            commit(s) { s.plexToken = approved }
+            approved
+        }
+        val servers = auth.servers(token)
+        mediaRequire(servers.isNotEmpty(), "No Plex servers available")
+        commit(s) {
+            s.plexToken = null; s.plexServers = servers; s.state = "plex_servers"
+            s.result = JSONObject().put("servers", JSONArray(servers.map { it.publicJson() }))
+        }
+        val manual = s.value("base").trim()
+        if (manual.isNotBlank()) {
+            val identity = auth.identify(manual)
+            val server = servers.firstOrNull { it.id == identity } ?: throw MediaServerFailure("Server authentication required")
+            connectPlex(s, app, server, listOf(PlexAuth.Connection(MediaServerAccount.address(manual), true, false)))
+        } else if (servers.size == 1) connectPlex(s, app, servers.single())
+    }
+    private fun connectPlex(s: Session, app: Context, server: PlexAuth.Server,
+        connections: List<PlexAuth.Connection> = server.connections) {
+        val auth = s.plex ?: throw MediaServerFailure("Server authentication required")
+        val manager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val subnets = manager.activeNetwork?.let { manager.getLinkProperties(it) }?.linkAddresses.orEmpty().filter { it.address is Inet4Address }
+            .map { MediaServerDiscovery.Subnet(it.address.hostAddress!!, it.prefixLength) }
+        val targets = PlexAuth.preferredConnections(connections, subnets).filter { !server.httpsRequired || it.base.startsWith("https://") }
+        val name = s.value("name").trim().take(80).ifBlank { server.name }
+        val account = PlexConnectionSelector.select(targets, { s.cancelled || closed }, { auth.cancelProbes() }) { connection ->
+            mediaRequire(auth.identify(connection.base, 2500, 3000) == server.id, "Wrong server type")
+            auth.probe(MediaServerAccount(s.old?.id ?: s.plexClientId, name, connection.base, server.token, "plex", server.id))
+        }
+        commit(s) { synchronized(MediaServerStore) {
+            check(s.old == null || MediaServerStore.get(app, s.old!!.id) == s.old)
+            MediaServerStore.save(app, account); s.state = "done"; s.result = JSONObject()
+            s.plexServers = emptyList(); s.plexPin = null; s.inputs.values.forEach { it.clear() }
+        } }
+        auth.close()
     }
 
     private fun dav(s: Session, app: Context) {
@@ -337,9 +409,10 @@ internal class AccountManager(private val host: () -> Activity?) {
     @Synchronized fun cancel(id: Int) {
         val s = session?.takeIf { it.id == id } ?: return
         s.cancelSession { s.inputs.values.forEach { it.clear() }; s.challenge = null; s.result = JSONObject() }
-        s.auth?.close(); s.http?.close(); s.discovery?.close(); s.web?.close()
+        s.plexServers = emptyList(); s.plexPin = null; s.plexToken = null
+        s.auth?.close(); s.http?.close(); s.discovery?.close(); s.web?.close(); s.plex?.close()
         session = null
     }
     @Synchronized fun close() { closed = true; cancel(session?.id ?: 0); worker.shutdownNow() }
-    private fun providerName(provider: String) = mapOf("stash" to "Stash", "emby" to "Emby", "jellyfin" to "Jellyfin", "xbvr" to "XBVR")[provider] ?: provider
+    private fun providerName(provider: String) = mapOf("stash" to "Stash", "emby" to "Emby", "jellyfin" to "Jellyfin", "xbvr" to "XBVR", "plex" to "Plex")[provider] ?: provider
 }

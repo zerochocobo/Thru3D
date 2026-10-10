@@ -1,14 +1,15 @@
 --- a/video/out/vo_libmpv.c
 +++ b/video/out/vo_libmpv.c
-@@ -26,6 +26,7 @@
+@@ -26,6 +26,8 @@
  #include "player/client.h"
  
  #include "libmpv.h"
 +#include "include/mpv/quest_frame.h"
++#include "video/quest_dovi_profile.h"
  
  #if HAVE_MACOS_COCOA_CB
  #include "osdep/mac/app_bridge.h"
-@@ -86,6 +87,8 @@
+@@ -86,6 +88,8 @@
  
      // --- Protected by lock
      struct vo_frame *next_frame;    // next frame to draw
@@ -17,7 +18,7 @@
      int64_t present_count;          // incremented when next frame can be shown
      int64_t expected_flip_count;    // next vsync event for next_frame
      bool redrawing;                 // next_frame was a redraw request
-@@ -335,6 +338,11 @@
+@@ -335,6 +339,11 @@
  
  int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
  {
@@ -29,7 +30,7 @@
      mp_mutex_lock(&ctx->lock);
  
      int do_render =
-@@ -384,6 +392,7 @@
+@@ -384,6 +393,7 @@
      ctx->need_reset = false;
  
      struct vo_frame *frame = ctx->next_frame;
@@ -37,7 +38,7 @@
      int64_t wait_present_count = ctx->present_count;
      if (frame) {
          ctx->next_frame = NULL;
-@@ -392,6 +401,7 @@
+@@ -392,6 +402,7 @@
          mp_cond_broadcast(&ctx->video_wait);
          talloc_free(ctx->cur_frame);
          ctx->cur_frame = vo_frame_ref(frame);
@@ -45,7 +46,7 @@
      } else {
          frame = vo_frame_ref(ctx->cur_frame);
          if (frame)
-@@ -402,6 +412,36 @@
+@@ -402,6 +413,38 @@
      if (!frame)
          frame = &dummy;
  
@@ -61,6 +62,8 @@
 +            quest->flags = QUEST_MPV_HAS_IMAGE |
 +                (frame->redraw ? QUEST_MPV_REDRAW : 0) |
 +                (frame->repeat ? QUEST_MPV_REPEAT : 0);
++            if (quest_dovi_profile5(image))
++                quest->flags |= QUEST_MPV_DOVI_PROFILE5;
 +            quest->frame_id = frame->frame_id;
 +            quest->source_epoch = quest_epoch;
 +            quest->width = image->w;
@@ -82,7 +85,7 @@
      mp_mutex_unlock(&ctx->lock);
  
      MP_STATS(ctx, "glcb-render");
-@@ -493,6 +533,11 @@
+@@ -493,6 +536,11 @@
      mp_mutex_lock(&ctx->lock);
      mp_assert(!ctx->next_frame);
      ctx->next_frame = vo_frame_ref(frame);
@@ -94,7 +97,7 @@
      ctx->expected_flip_count = ctx->flip_count + 1;
      ctx->redrawing = frame->redraw || !frame->current;
      mp_mutex_unlock(&ctx->lock);
-@@ -545,6 +590,7 @@
+@@ -545,6 +593,7 @@
      if (ctx->next_frame) {
          talloc_free(ctx->cur_frame);
          ctx->cur_frame = ctx->next_frame;
@@ -102,7 +105,7 @@
          ctx->next_frame = NULL;
          ctx->present_count += 2;
          mp_cond_signal(&ctx->video_wait);
-@@ -606,6 +652,8 @@
+@@ -606,6 +655,8 @@
      case VOCTRL_RESET:
          mp_mutex_lock(&ctx->lock);
          forget_frames(ctx, false);
@@ -111,7 +114,7 @@
          ctx->need_reset = true;
          mp_mutex_unlock(&ctx->lock);
          vo->want_redraw = true;
-@@ -755,3 +803,8 @@
+@@ -755,3 +806,8 @@
      .uninit = uninit,
      .priv_size = sizeof(struct vo_priv),
  };
@@ -155,10 +158,62 @@
  
 --- a/video/out/gpu/video.c
 +++ b/video/out/gpu/video.c
-@@ -3670,6 +3670,24 @@
-     pass_report_performance(p);
+@@ -43,6 +43,7 @@
+ #include "video/out/aspect.h"
+ #include "video/out/dither.h"
+ #include "video/out/vo.h"
++#include "video/quest_dovi_profile.h"
+ 
+ // must be sorted, and terminated with 0
+ int filter_sizes[] =
+@@ -1216,6 +1217,8 @@
+         char *pixel_size = mp_tprintf(32, "pixel_size%d", n);
+ 
+         gl_sc_uniform_texture(sc, texture_name, s->tex);
++        if (s->tex->params.external_oes && quest_dovi_profile5(p->image.mpi))
++            gl_sc_quest_raw_yuv(sc, texture_name);
+         float f[2] = {1, 1};
+         if (!s->tex->params.non_normalized) {
+             f[0] = s->tex->params.w;
+@@ -2536,6 +2539,8 @@
+     copy_image(p, &(int){0}, img);
  }
  
++#include "quest_dovi_gpu.h"
++
+ // yuv conversion, and any other conversions before main up/down-scaling
+ static void pass_convert_yuv(struct gl_video *p)
+ {
+@@ -2552,6 +2557,11 @@
+ 
+     if (p->color_swizzle[0])
+         GLSLF("color = color.%s;\n", p->color_swizzle);
++
++    if (quest_dovi_profile5(p->image.mpi)) {
++        quest_pass_dovi(p);
++        return;
++    }
+ 
+     // Pre-colormatrix input gamma correction
+     if (cparams.repr.sys == PL_COLOR_SYSTEM_XYZ)
+@@ -2890,7 +2900,10 @@
+     }
+ 
+     struct gl_tone_map_opts tone_map = p->opts.tone_map;
+-    bool detect_peak = tone_map.compute_peak >= 0 && pl_color_space_is_hdr(&src)
++    // Profile 5 already supplies frame HDR metadata. Avoid a GPU reduction
++    // and use the existing analytic tone mapping in the same output draw.
++    bool detect_peak = !quest_dovi_profile5(p->image.mpi) &&
++                       tone_map.compute_peak >= 0 && pl_color_space_is_hdr(&src)
+                        && src.hdr.max_luma > dst.hdr.max_luma;
+ 
+     if (detect_peak && !p->hdr_peak_ssbo) {
+@@ -3668,6 +3681,25 @@
+ 
+     p->frames_rendered++;
+     pass_report_performance(p);
++}
++
 +bool gl_video_quest_source_valid(struct gl_video *p, uint64_t frame_id)
 +{
 +    return !p->broken_frame && !p->is_interpolated && !p->hwdec_overlay &&
@@ -168,18 +223,17 @@
 +bool gl_video_quest_export(struct gl_video *p, uint64_t frame_id, void **image, void **buffer)
 +{
 +    struct ra_hwdec_mapper *m = p->hwdec_mapper;
-+    if (!gl_video_quest_source_valid(p, frame_id) || !m || !p->image.hwdec_mapped ||
++    if (quest_dovi_profile5(p->image.mpi) ||
++        !gl_video_quest_source_valid(p, frame_id) || !m || !p->image.hwdec_mapped ||
 +        !m->quest_image || m->quest_detached)
 +        return false;
 +    m->quest_detached = true;
 +    *image = m->quest_image;
 +    *buffer = m->quest_buffer;
 +    return true;
-+}
-+
+ }
+ 
  void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
-                          struct voctrl_screenshot *args)
- {
 --- a/video/out/gpu/video.h
 +++ b/video/out/gpu/video.h
 @@ -205,6 +205,8 @@
@@ -361,9 +415,191 @@
  };
  
  // This can be used to map frames of a specific hw format as GL textures.
+--- a/video/out/gpu/shader_cache.c
++++ b/video/out/gpu/shader_cache.c
+@@ -331,6 +331,8 @@
+     u->input.binding = gl_sc_next_binding(sc, u->input.type);
+     u->v.tex = tex;
+ }
++
++#include "quest_dovi_shader_cache.h"
+ 
+ void gl_sc_uniform_image2D_wo(struct gl_shader_cache *sc, const char *name,
+                               struct ra_tex *tex)
+--- a/video/out/gpu/shader_cache.h
++++ b/video/out/gpu/shader_cache.h
+@@ -6,6 +6,11 @@
+ 
+ // For mp_pass_perf
+ #include "video/out/vo.h"
++
++#include <libplacebo/shaders.h>
++struct gl_shader_cache;
++bool gl_sc_quest_pl_shader(struct gl_shader_cache *sc, const struct pl_shader_res *res);
++void gl_sc_quest_raw_yuv(struct gl_shader_cache *sc, const char *name);
+ 
+ struct mp_log;
+ struct mpv_global;
+--- a/video/out/opengl/common.c
++++ b/video/out/opengl/common.c
+@@ -141,6 +141,7 @@
+             DEF_FN(Uniform1f),
+             DEF_FN(Uniform2f),
+             DEF_FN(Uniform3f),
++            DEF_FN(Uniform4f),
+             DEF_FN(Uniform1i),
+             DEF_FN(UniformMatrix2fv),
+             DEF_FN(UniformMatrix3fv),
+--- /dev/null
++++ b/video/quest_dovi_profile.h
+@@ -0,0 +1,21 @@
++/* Profile 5 has no backwards-compatible base layer. Do not opt other profiles
++ * into this renderer: they retain the existing playback/Alpha fast paths. */
++#include <libavutil/dovi_meta.h>
++#include <libavutil/frame.h>
++#include <libavutil/buffer.h>
++
++static bool quest_dovi_profile5(const struct mp_image *image)
++{
++    if (!image || !image->dovi)
++        return false;
++    for (int n = 0; n < image->num_ff_side_data; n++) {
++        const struct mp_ff_side_data *sd = &image->ff_side_data[n];
++        if (sd->type != AV_FRAME_DATA_DOVI_METADATA)
++            continue;
++        const AVDOVIMetadata *md = (const void *)sd->buf->data;
++        const AVDOVIRpuDataHeader *h = av_dovi_get_header(md);
++        return h->vdr_rpu_profile == 0 && h->bl_video_full_range_flag &&
++               h->disable_residual_flag;
++    }
++    return false;
++}
+--- /dev/null
++++ b/video/out/gpu/quest_dovi_gpu.h
+@@ -0,0 +1,35 @@
++/* Included in the pinned vo_gpu renderer. libplacebo generates only the Dolby
++ * reshaping/IPT conversion; MPV's existing color management maps PQ to SDR.
++ * Profile 5 uses MPV's full-precision HDR intermediate before the SDR FBO;
++ * other videos retain the original single-pass renderer. */
++#include <libplacebo/shaders/colorspace.h>
++
++static void quest_pass_dovi(struct gl_video *p)
++{
++    const struct mp_image *image = p->image.mpi;
++    struct pl_color_repr repr = image->params.repr;
++    repr.sys = PL_COLOR_SYSTEM_DOLBYVISION;
++    repr.levels = PL_COLOR_LEVELS_FULL;
++    // pass_get_images has already normalized software texture bit packing;
++    // GL_EXT_YUV_target returns normalized components for hardware images.
++    repr.bits = (struct pl_bit_encoding){0};
++    struct pl_shader_params params = {
++        .id = 71,
++        .glsl = {.version = 300, .gles = true},
++        .dynamic_constants = true,
++    };
++    pl_shader shader = pl_shader_alloc(NULL, &params);
++    pl_shader_decode_color_ex(shader, pl_color_decode_args(.repr = &repr));
++    const struct pl_shader_res *res = pl_shader_finalize(shader);
++    if (!res || !gl_sc_quest_pl_shader(p->sc, res)) {
++        MP_ERR(p, "Profile 5 color shader generation failed\n");
++        // Mark the render invalid, rather than publish unconverted green pixels.
++        p->broken_frame = true;
++    }
++    pl_shader_free(&shader);
++    p->image_params.color = image->params.color;
++    p->image_params.color.primaries = PL_COLOR_PRIM_BT_2020;
++    p->image_params.color.transfer = PL_COLOR_TRC_PQ;
++    p->image_params.light = MP_CSP_LIGHT_DISPLAY;
++    p->user_gamma = 1.0;
++}
+--- /dev/null
++++ b/video/out/gpu/quest_dovi_shader_cache.h
+@@ -0,0 +1,82 @@
++/* No per-frame coefficients are embedded in shader text. The array elements
++ * use ordinary cached MPV uniforms; local arrays keep libplacebo's GLSL intact
++ * without extending the renderer's uniform-buffer ABI. */
++static bool quest_pl_uniform(struct gl_shader_cache *sc, const char *name,
++                             const struct pl_var *var, const float *data)
++{
++    if (var->type == PL_VAR_SINT && var->dim_v == 1 && var->dim_m == 1) {
++        gl_sc_uniform_i(sc, (char *)name, *(const int *)data);
++        return true;
++    }
++    if (var->type != PL_VAR_FLOAT || var->dim_v < 1 || var->dim_v > 4 ||
++        var->dim_m < 1 || var->dim_m > 3 ||
++        (var->dim_m > 1 && var->dim_m != var->dim_v))
++        return false;
++    struct sc_uniform *u = find_uniform(sc, bstr0(name));
++    u->input.type = RA_VARTYPE_FLOAT;
++    u->input.dim_v = var->dim_v;
++    u->input.dim_m = var->dim_m;
++    u->glsl_type = pl_var_glsl_type_name(*var);
++    gl_sc_uniform_dynamic(sc);
++    update_uniform_params(sc, u);
++    memcpy(u->v.f, data, var->dim_v * var->dim_m * sizeof(float));
++    return true;
++}
++
++bool gl_sc_quest_pl_shader(struct gl_shader_cache *sc,
++                          const struct pl_shader_res *res)
++{
++    if (res->input != PL_SHADER_SIG_COLOR || res->output != PL_SHADER_SIG_COLOR ||
++        res->num_descriptors || res->num_constants || res->num_vertex_attribs)
++        return false;
++    const char *function = strstr(res->glsl, res->name);
++    const char *body = function ? strchr(function, '{') : NULL;
++    if (!body)
++        return false;
++    bstr arrays = {0};
++    for (int n = 0; n < res->num_variables; n++) {
++        const struct pl_shader_var *v = &res->variables[n];
++        const struct pl_var *var = &v->var;
++        int count = MPMAX(1, var->dim_a);
++        if (count > 64 || (var->type != PL_VAR_FLOAT && var->type != PL_VAR_SINT))
++            goto fail;
++        const char *type = pl_var_glsl_type_name(*var);
++        if (count > 1)
++            bstr_xappend_asprintf(sc, &arrays, "%s %s[%d] = %s[%d](", type,
++                                 var->name, count, type, count);
++        for (int a = 0; a < count; a++) {
++            char *name = count > 1 ? ta_asprintf(sc, "%s_q%d", var->name, a)
++                                   : ta_strdup(sc, var->name);
++            const float *data = (const float *)v->data + a * var->dim_v * var->dim_m;
++            if (!quest_pl_uniform(sc, name, var, data)) {
++                ta_free(name);
++                goto fail;
++            }
++            if (count > 1)
++                bstr_xappend_asprintf(sc, &arrays, "%s%s", a ? "," : "", name);
++            ta_free(name);
++        }
++        if (count > 1)
++            bstr_xappend(sc, &arrays, bstr0(");\n"));
++    }
++    gl_sc_haddf(sc, "%.*s\n%.*s\n%s", (int)(body + 1 - res->glsl), res->glsl,
++                BSTR_P(arrays), body + 1);
++    gl_sc_addf(sc, "color = %s(color);\n", res->name);
++    ta_free(arrays.start);
++    return true;
++fail:
++    ta_free(arrays.start);
++    return false;
++}
++
++void gl_sc_quest_raw_yuv(struct gl_shader_cache *sc, const char *name)
++{
++    gl_sc_enable_extension(sc, "GL_EXT_YUV_target");
++    for (int n = 0; n < sc->num_uniforms; n++) {
++        struct sc_uniform *u = &sc->uniforms[n];
++        if (strcmp(u->input.name, name) == 0 && u->input.type == RA_VARTYPE_TEX) {
++            u->glsl_type = "highp __samplerExternal2DY2YEXT";
++            return;
++        }
++    }
++}
 --- /dev/null
 +++ b/include/mpv/quest_frame.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,67 @@
 +/* Project-specific extension for the pinned mpv source build. */
 +#ifndef QUEST_MPV_SOURCE_FRAME_H
 +#define QUEST_MPV_SOURCE_FRAME_H
@@ -381,7 +617,8 @@
 +    QUEST_MPV_PTS_VALID = 1u << 1,
 +    QUEST_MPV_REDRAW = 1u << 2,
 +    QUEST_MPV_REPEAT = 1u << 3,
-+    QUEST_MPV_RENDER_VALID = 1u << 4
++    QUEST_MPV_RENDER_VALID = 1u << 4,
++    QUEST_MPV_DOVI_PROFILE5 = 1u << 5
 +};
 +
 +/* Output from the SAME render transaction that selects and draws the vo_frame.

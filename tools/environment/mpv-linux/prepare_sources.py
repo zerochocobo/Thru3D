@@ -15,6 +15,41 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def apply_dovi_patch(ffmpeg):
+    patch_dir = ROOT / 'native/mpv/patches'
+    patch = patch_dir / '0002-ffmpeg-profile5-rpu.patch'
+    record = json.loads((patch_dir / 'dovi-rpu-manifest.json').read_text())
+    if sha(patch) != record['patch_sha256']:
+        raise ValueError('Dolby RPU patch hash differs')
+    applied = all((ffmpeg/name).exists() and sha(ffmpeg/name) == digest
+                  for name, digest in record['patched_files_sha256'].items())
+    if not applied:
+        base_matches = all(sha(ffmpeg/name) == digest for name, digest
+                           in record['base_files_sha256'].items())
+        if not base_matches:
+            previous_path = ffmpeg / '.quest-dovi-manifest.json'
+            previous_patch = ffmpeg / '.quest-dovi-applied.patch'
+            if not previous_path.exists() or not previous_patch.exists():
+                raise ValueError('Modified FFmpeg tree has no verified Dolby patch')
+            previous = json.loads(previous_path.read_text())
+            if (sha(previous_patch) != previous['patch_sha256'] or
+                not all((ffmpeg/name).exists() and sha(ffmpeg/name) == digest
+                        for name, digest in previous['patched_files_sha256'].items())):
+                raise ValueError('Previous Dolby patch/tree bytes differ')
+            subprocess.run(['git', 'apply', '--reverse', '--check', str(previous_patch)], cwd=ffmpeg, check=True)
+            subprocess.run(['git', 'apply', '--reverse', str(previous_patch)], cwd=ffmpeg, check=True)
+        for name, digest in record['base_files_sha256'].items():
+            if sha(ffmpeg/name) != digest:
+                raise ValueError(f'FFmpeg is not the pinned Dolby patch base: {name}')
+        subprocess.run(['git', 'apply', '--check', str(patch)], cwd=ffmpeg, check=True)
+        subprocess.run(['git', 'apply', str(patch)], cwd=ffmpeg, check=True)
+    for name, digest in record['patched_files_sha256'].items():
+        if sha(ffmpeg/name) != digest:
+            raise ValueError(f'Patched Dolby source bytes differ: {name}')
+    (ffmpeg / '.quest-dovi-applied.patch').write_bytes(patch.read_bytes())
+    (ffmpeg / '.quest-dovi-manifest.json').write_text(json.dumps(record, indent=2)+'\n')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cache", type=Path, default=Path(os.environ.get('THRU3D_MPV_DOWNLOADS', str(Path.home() / '.cache/thru3d-mpv/downloads'))))
@@ -79,7 +114,10 @@ def main():
             raise ValueError(f"Patched source bytes differ: {name}")
     (mpv/".quest-frame-applied.patch").write_bytes(patch.read_bytes())
     (mpv/".quest-frame-manifest.json").write_text(json.dumps(record, indent=2)+"\n")
-    print("Locked sources and same-render source-frame patch verified")
+    apply_dovi_patch(base/'ffmpeg')
+    from pgs_patch import apply_pgs_patch
+    apply_pgs_patch(mpv)
+    print("Locked sources, same-render frame patch and Profile 5 RPU patch verified")
 
 
 if __name__ == "__main__":

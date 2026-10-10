@@ -7,10 +7,12 @@ const MARGIN := 40.0
 const COLUMN_PITCH := 56.0
 var columns: Array[Dictionary] = []
 var content_scale := 1.0
+var font_scale := 1.0
 var _server: TextServer
 var _font: Font
 
-func set_text(value: String, font: Font) -> void:
+func set_text(value: String, font: Font, text_size: float = 1.0) -> void:
+	font_scale = text_size
 	_clear_columns()
 	_server = TextServerManager.get_primary_interface()
 	_font = font
@@ -30,16 +32,16 @@ func set_text(value: String, font: Font) -> void:
 			columns.append({"text": text, "rid": column, "size": Vector2(column_size.y, column_size.x) if sideways else column_size, "sideways": sideways})
 		_server.free_rid(shape)
 	var height := 0.0
-	var width := float(FONT_SIZE)
+	var width := float(FONT_SIZE) * font_scale
 	for column in columns:
 		height = maxf(height, column.size.y)
 		width = maxf(width, column.size.x)
-	width += maxf(0, columns.size() - 1) * COLUMN_PITCH
+	width += maxf(0, columns.size() - 1) * COLUMN_PITCH * font_scale
 	content_scale = minf(1, minf((size.x - 2 * MARGIN) / width, available / maxf(1, height)))
-	var right := (size.x / content_scale + maxf(0, columns.size() - 1) * COLUMN_PITCH) / 2
+	var right := (size.x / content_scale + maxf(0, columns.size() - 1) * COLUMN_PITCH * font_scale) / 2
 	var top := (size.y / content_scale - height) / 2
 	for index in columns.size():
-		columns[index].point = Vector2(right - index * COLUMN_PITCH, top)
+		columns[index].point = Vector2(right - index * COLUMN_PITCH * font_scale, top)
 		if columns[index].get("sideways", false):
 			columns[index].point.x -= (_server.shaped_text_get_ascent(columns[index].rid) - _server.shaped_text_get_descent(columns[index].rid)) / 2
 	queue_redraw()
@@ -53,7 +55,7 @@ static func _has_cjk(text: String) -> bool:
 
 func _shape(text: String, vertical: bool = true) -> RID:
 	var shape := _server.create_shaped_text(TextServer.DIRECTION_AUTO, TextServer.ORIENTATION_VERTICAL if vertical else TextServer.ORIENTATION_HORIZONTAL)
-	_server.shaped_text_add_string(shape, text, _font.get_rids(), FONT_SIZE)
+	_server.shaped_text_add_string(shape, text, _font.get_rids(), roundi(FONT_SIZE * font_scale))
 	_server.shaped_text_shape(shape)
 	return shape
 
@@ -67,7 +69,7 @@ func _draw() -> void:
 			point = Vector2.ZERO
 		else:
 			draw_set_transform(Vector2.ZERO, 0, Vector2.ONE * content_scale)
-		_server.shaped_text_draw_outline(column.rid, get_canvas_item(), point, -1, -1, 8, Color.BLACK)
+		_server.shaped_text_draw_outline(column.rid, get_canvas_item(), point, -1, -1, maxi(2, roundi(8 * font_scale)), Color.BLACK)
 		_server.shaped_text_draw(column.rid, get_canvas_item(), point, -1, -1, Color.WHITE)
 
 func _clear_columns() -> void:

@@ -35,7 +35,7 @@ internal class MediaServerDiscovery(
     }
     private val connections = ConcurrentHashMap.newKeySet<HttpURLConnection>()
     private val found = ConcurrentHashMap<String, Found>()
-    private val pool = Executors.newFixedThreadPool(16)
+    private val pool = Executors.newFixedThreadPool(24)
     @Volatile private var closed = false
     @Volatile private var udp: DatagramSocket? = null
     private data class Response(val status: Int, val text: String)
@@ -65,6 +65,17 @@ internal class MediaServerDiscovery(
             Response(code, content)
         } catch (_: Exception) { null } finally { connections.remove(connection); connection.disconnect() }
     }
+    private fun identifyPlex(address: String): Found? {
+        val identity = request(address, "/identity")
+        val text = identity?.text.orEmpty()
+        // Identity is public; reject DTDs and only recognize Plex's bounded identity document.
+        val plex = text.length < 8192 && !text.contains("<!DOCTYPE", true) &&
+            Regex("<MediaContainer\\b").containsMatchIn(text) &&
+            Regex("machineIdentifier=\"[A-Za-z0-9-]{1,64}\"").containsMatchIn(text) &&
+            Regex("version=\"[^\"]{1,80}\"").containsMatchIn(text)
+        if (identity?.status == 200 && plex) return Found(address, "plex", "Plex")
+        return null
+    }
     fun identify(address: String): Found? {
         val info = request(address, "/System/Info/Public") ?: return null
         val data = runCatching { JSONObject(info.text) }.getOrNull()
@@ -77,6 +88,7 @@ internal class MediaServerDiscovery(
             }
             return Found(address, provider, data.optString("ServerName").take(80))
         }
+        identifyPlex(address)?.let { return it }
         val graph = request(address, "/graphql", JSONObject().put("query", "query { version { version } }").toString())
         val version = runCatching { JSONObject(graph?.text.orEmpty()).getJSONObject("data").getJSONObject("version").getString("version") }.getOrNull()
         if (!version.isNullOrBlank()) return Found(address, "stash", "Stash")
@@ -111,8 +123,8 @@ internal class MediaServerDiscovery(
                 }
             } catch (_: Exception) { } finally { socket.close(); udp = null }
         })
-        for (host in subnet.hosts()) for (port in listOf(8096, 9999)) tasks.add(Callable {
-            if (!closed) identify("http://$host:$port")?.let(::publish)
+        for (port in listOf(32400, 8096, 9999)) for (host in subnet.hosts()) tasks.add(Callable {
+            if (!closed) (if (port == 32400) identifyPlex("http://$host:$port") else identify("http://$host:$port"))?.let(::publish)
         })
         try { pool.invokeAll(tasks, 12, TimeUnit.SECONDS) } finally { close() }
         return found.size

@@ -24,6 +24,8 @@ uniform bool packed_alpha = false;
 #include "res://shaders/video_coordinates.gdshaderinc"
 #include "res://shaders/sharpness.gdshaderinc"
 #include "res://shaders/projected_subtitles.gdshaderinc"
+#include "res://shaders/bitmap_subtitles.gdshaderinc"
+uniform bool separate_subtitles = false;
 
 vec3 clarity_sample(vec2 p, vec2 lo, vec2 hi, vec3 center) {
 	vec2 q = clamp(p, lo, hi);
@@ -131,7 +133,10 @@ void fragment() {
 	} else {
 		ALPHA = alpha_enabled && !depth_enabled ? (outside ? 0.0 : clamp(texture(alpha_texture, alpha_p).r, 0.0, 1.0)) : 1.0;
 	}
+	if (!separate_subtitles) {
 	vec4 composed = caption_composite(ALBEDO, ALPHA, projected_caption(media_direction, eye_index));
+	composed = caption_composite(composed.rgb, composed.a, bitmap_caption(raw_eye_uv(eye_uv(UV, media_direction))));
 	ALBEDO = composed.rgb;
 	ALPHA = composed.a;
+	}
 }

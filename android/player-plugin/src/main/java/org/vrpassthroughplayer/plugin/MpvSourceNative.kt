@@ -22,16 +22,20 @@ internal object MpvSourceNative {
     /** Insert consumer-context fence after its last copy/draw; rejects double release. */
     @JvmStatic external fun release(handle: Long, producerToken: Long): Boolean
     @JvmStatic external fun setPlaying(handle: Long, playing: Boolean)
+    /** Positive playback rate; media timestamps and subtitle timing remain in source time. */
+    @JvmStatic external fun setSpeed(handle: Long, speed: Double): Boolean
     /** Coalesced control request. -1 auto, 0 disabled, or an actual track-list id; volume 0..100. */
     @JvmStatic external fun setAudio(handle: Long, trackId: Int, volume: Double, muted: Boolean): Boolean
     /** 0 rejected; positive coalesced command serial. -1 auto, 0 off, actual subtitle id. */
     @JvmStatic external fun setSubtitle(handle: Long, trackId: Int): Long
     /** Plain text in a separate UI layer; empty when no newer snapshot is available. */
     @JvmStatic external fun subtitleStatus(handle: Long, afterSequence: Long): String
+    /** Cropped premultiplied RGBA for this exact bitmap version, empty if superseded. */
+    @JvmStatic external fun subtitleBitmap(handle: Long, version: Long): ByteArray
     @JvmStatic external fun seek(handle: Long, positionMs: Long, exact: Boolean = true): Boolean
     /** Present at most fps source frames per second (0 = all), chosen by scheduled display time before rendering. */
     @JvmStatic external fun setFrameCap(handle: Long, fps: Int)
-    /** Direct mode: publish the decoder's MediaCodec images ("hardware_buffer") instead of RGBA copies. */
+    /** Direct mode: publish MediaCodec images; Profile 5 always retains converted SDR RGBA. */
     @JvmStatic external fun setDirect(handle: Long, enabled: Boolean)
     /** Re-render a retained paused frame; its original frame ID/PTS/epoch remain unchanged. */
     @JvmStatic external fun requestFrame(handle: Long)

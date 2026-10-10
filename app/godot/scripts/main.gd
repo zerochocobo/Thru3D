@@ -152,6 +152,8 @@ func _ready() -> void:
 	video.load_mode_lock(settings.get_value("video", "mode_lock", {}))
 	video.subtitle_distance = float(settings.get_value("subtitles", "distance", 5.0))
 	video.subtitle_position = video.SubtitleDepth.restore_position(settings)
+	video.subtitle_size = clampf(float(settings.get_value("subtitles", "size", 1.0)), 0.5, 2.0)
+	video.subtitle_flat_position = clampf(float(settings.get_value("subtitles", "flat_position", 0.0)), 0.0, 1.0)
 	video.subtitle_direction = int(settings.get_value("subtitles", "direction", 0))
 	video.color_grade.restore(settings.get_value("video", "color_grade", {}))
 	# The flat screen keeps the distance, size and curve the viewer last chose.
@@ -796,7 +798,7 @@ func _turn_picture(yaw: float, pitch: float) -> void:
 	var angles := _ray_angles(offset) + Vector2(yaw, pitch)
 	var facing := Basis(Vector3.UP, angles.x) * Basis(Vector3.RIGHT, clampf(angles.y, -1.3, 1.3))
 	_viewer().flat_pose = _viewer().global_transform.affine_inverse() * Transform3D(facing, eye + facing * Vector3(0, 0, -distance))
-	_viewer().panel.transform = _viewer().flat_pose
+	_viewer()._apply_geometry()
 
 ## The flat screen nearer (negative) or farther along the line from the eyes, still facing them.
 func _push_screen(amount: float) -> void:
@@ -805,9 +807,9 @@ func _push_screen(amount: float) -> void:
 	if offset.length() < 0.1:
 		return
 	_viewer().set_screen_distance(offset.length() + amount)
-	var pose := Transform3D(_viewer().panel.global_basis, eye + offset.normalized() * _viewer().screen_distance)
+	var pose := Transform3D(_viewer().subtitle_transform().basis, eye + offset.normalized() * _viewer().screen_distance)
 	_viewer().flat_pose = _viewer().global_transform.affine_inverse() * pose
-	_viewer().panel.transform = _viewer().flat_pose
+	_viewer()._apply_geometry()
 
 func _save_screen() -> void:
 	if photo_active:
@@ -1061,16 +1063,17 @@ func _place_screen() -> void:
 	if pose != null:
 		_viewer().flat_pose = _viewer().global_transform.affine_inverse() * pose
 		if _viewer().geometry == Geometry.Geometry.FLAT:
-			_viewer().panel.transform = _viewer().flat_pose
+			_viewer()._apply_geometry()
 
 func _place_menu(menu: Node3D) -> void:
-	var drop := 0.45 if menu == player_menu else 0.05
+	var drop := (0.45 if player_menu.section == 0 else 0.0) if menu == player_menu else 0.05
+	if menu == player_menu: player_menu.lift_panels = true
 	var pose: Variant = _view_pose(1.4, drop)
 	if pose == null:
-		menu.position = Vector3(0, 1.45, -1.55)
+		menu.transform = Transform3D(Basis.IDENTITY, Vector3(0, 1.6 - drop, -1.55))
 	else:
-		# Below eye level, the controls tilt up to face the eyes.
-		menu.global_transform = Transform3D(pose.basis * Basis(Vector3.RIGHT, -atan2(drop, 1.4)), pose.origin)
+		# Keep the entire menu upright so taller popups retain legible upper rows.
+		menu.global_transform = pose
 
 func _active_menu() -> Node3D:
 	if recent_menu and recent_menu.visible:
@@ -1255,6 +1258,7 @@ func _on_player_setting(key: String, value: Variant) -> void:
 	if photo_active: return
 	match key:
 		"seek_mode", "subtitle_distance", "subtitle_position", "subtitle_direction": _on_setting_changed(key, value)
+		"subtitle_size", "subtitle_flat_position": _on_playback_adjustment(key, value); _save_playback_adjustments()
 		"loop": video.loop_enabled = bool(value); video.changed.emit()
 		"screen_curve": video.set_screen_curve(float(value)); _save_screen(); video.changed.emit()
 		"audio_track":
@@ -1317,10 +1321,7 @@ func _menu_state() -> Dictionary:
 			if track.get("external", false) and str(track.get("title", "")) == "Clone voice": audio_options.insert(1, option)
 			else: audio_options.append(option)
 	audio_options.append({"value": 0, "label": "Off"})
-	var text_tracks: Array[Dictionary] = []
-	for track in details.get("subtitle_tracks", []):
-		if track is Dictionary and Video.SubtitleState.text_codec(str(track.get("codec", ""))):
-			text_tracks.append(track)
+	var text_tracks: Array = video.subtitle_tracks()
 	var result := {"has_video": not video.local_uri.is_empty() and video.media.accepts(video.media.session_id),
 		"has_previous_video": not _adjacent_video(-1).is_empty(), "has_next_video": not _adjacent_video(1).is_empty(),
 		"playing": video.requested_play, "playback_state": video.media.state,
@@ -1336,6 +1337,8 @@ func _menu_state() -> Dictionary:
 		"clone_voice": video.clone_voice_track() > 0, "clone_voice_active": video.clone_voice_active(),
 		"depth_requested": video.depth_requested, "depth_enabled": video.depth_enabled, "depth_strength": video.depth_strength,
 		"screen_curve": video.screen_curve, "screen_distance": video.screen_distance,
+		"screen_scale": video.screen_scale * 100.0, "screen_rotation": video.screen_rotation, "playback_speed": video.playback_speed,
+		"subtitle_size": video.subtitle_size * 100, "subtitle_flat_position": video.subtitle_flat_position * 100,
 		"subtitle_distance": video.subtitle_distance, "color_grade": video.color_grade.snapshot(),
 		"subtitle_position": video.subtitle_position,
 		"subtitle_direction": video.subtitle_direction,
@@ -1631,6 +1634,24 @@ func _on_playback_adjustment(key: String, value: Variant) -> void:
 		if photo_active or video.geometry != Geometry.Geometry.FLAT or not is_finite(float(value)): return
 		_push_screen(clampf(float(value), video.DISTANCE_LIMITS.x, video.DISTANCE_LIMITS.y) - video.panel.global_position.distance_to(_eye()))
 		return
+	elif key == "screen_scale":
+		if photo_active or video.geometry != Geometry.Geometry.FLAT or not is_finite(float(value)): return
+		video.set_screen_scale(float(value) / 100.0)
+		return
+	elif key == "screen_rotation":
+		if photo_active: return
+		video.set_screen_rotation(float(value))
+		return
+	elif key == "playback_speed":
+		if photo_active: return
+		video.set_playback_speed(float(value))
+		return
+	elif key == "subtitle_size":
+		if not is_finite(float(value)): return
+		video.subtitle_size = clampf(float(value) / 100.0, 0.5, 2.0)
+	elif key == "subtitle_flat_position":
+		if not is_finite(float(value)): return
+		video.subtitle_flat_position = clampf(float(value) / 100.0, 0.0, 1.0)
 	elif key == "subtitle_distance":
 		video.subtitle_distance = float(value)
 	elif key == "subtitle_position":
@@ -1645,6 +1666,9 @@ func _on_playback_adjustment(key: String, value: Variant) -> void:
 
 func _save_playback_adjustments() -> void:
 	settings.set_value("screen", "distance", video.screen_distance)
+	settings.set_value("screen", "scale", video.screen_scale)
+	settings.set_value("subtitles", "size", video.subtitle_size)
+	settings.set_value("subtitles", "flat_position", video.subtitle_flat_position)
 	settings.set_value("subtitles", "distance", video.subtitle_distance)
 	settings.set_value("subtitles", "elevation_degrees", video.subtitle_position)
 	settings.set_value("subtitles", "direction", video.subtitle_direction)

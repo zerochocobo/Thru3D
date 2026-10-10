@@ -15,7 +15,8 @@ enum quest_mpv_source_frame_flags {
     QUEST_MPV_PTS_VALID = 1u << 1,
     QUEST_MPV_REDRAW = 1u << 2,
     QUEST_MPV_REPEAT = 1u << 3,
-    QUEST_MPV_RENDER_VALID = 1u << 4
+    QUEST_MPV_RENDER_VALID = 1u << 4,
+    QUEST_MPV_DOVI_PROFILE5 = 1u << 5
 };
 
 /* Output from the SAME render transaction that selects and draws the vo_frame.

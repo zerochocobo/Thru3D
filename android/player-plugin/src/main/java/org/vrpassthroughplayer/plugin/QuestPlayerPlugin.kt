@@ -298,8 +298,10 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     @UsedByGodot fun set_mpv_playing(id: Int, playing: Boolean) { if (!closed.get()) mpv.setPlaying(id, playing) }
     @UsedByGodot fun set_mpv_audio(id: Int, trackId: Int, volume: Double, muted: Boolean): Boolean =
         !closed.get() && mpv.setAudio(id, trackId, volume, muted)
+    @UsedByGodot fun set_mpv_speed(id: Int, speed: Double): Boolean = !closed.get() && mpv.setSpeed(id, speed)
     @UsedByGodot fun set_mpv_subtitle(id: Int, trackId: Int): Boolean = !closed.get() && mpv.setSubtitle(id, trackId)
     @UsedByGodot fun get_mpv_subtitles(id: Int, afterSequence: Long): String = if (closed.get()) "" else mpv.subtitles(id, afterSequence)
+    @UsedByGodot fun get_mpv_subtitle_bitmap(id: Int, version: Long): ByteArray = if (closed.get()) ByteArray(0) else mpv.subtitleBitmap(id, version)
     @UsedByGodot fun set_mpv_depth_view(id: Int, shift: Double, convergence: Double): Boolean =
         !closed.get() && mpv.setDepthView(id, shift, convergence)
     @UsedByGodot fun claim_mpv_pair(id: Int, token: Long): String = if (closed.get()) "" else mpv.claim(id, token)

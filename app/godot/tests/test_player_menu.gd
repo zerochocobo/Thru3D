@@ -306,17 +306,16 @@ func _run() -> void:
 	video.control.duration_ms = 60000
 	menu.refresh_values()
 	check(not menu.text_snapshot().contains("Press trigger") and not menu.text_snapshot().contains("controller"), "Product controls omit implementation and interaction instruction text")
-	check(click(menu, 11) and menu.section == 1 and choose_setting(menu, "loop", true) and video.loop_enabled and menu.visible and menu.text_snapshot().contains("On"), "Loop radio selection applies without closing menu")
+	check(click(menu, 11) and menu.section == 1 and menu._adjustment == "screen" and click(menu, Menu.PLAYBACK_SETTINGS) and choose_setting(menu, "loop", true) and video.loop_enabled and menu.visible and menu.text_snapshot().contains("On"), "Loop radio selection applies without closing menu")
 	check(click(menu, 10) and menu.section == 0, "Arrow returns from the settings panel to the slim bar")
-	check(click(menu, 11) and menu.section == 1 and menu.visible, "Settings tab selected by ray")
+	check(click(menu, 11) and menu.section == 1 and menu.visible and click(menu, Menu.PLAYBACK_SETTINGS), "Settings tab selected by ray")
 	check(not menu.text_snapshot().contains("Test video") and not Menu.OPERATIONS[1].has("calibration"), "Settings no longer offers test videos")
-	check(not menu.text_snapshot().contains("Alpha resolution") and menu._buttons.any(func(b): return b.node.get_children().any(func(n): return n is Label3D and n.text == "Eye order")) and not menu.text_snapshot().contains("Unmute"),
-		"Eye order is accessible from Settings")
+	check(not menu.text_snapshot().contains("Alpha resolution") and not menu.text_snapshot().contains("Eye order"), "Mono settings hide eye order")
 	var eye_order_target := 100 + Menu.OPERATIONS[1].find("eyes")
 	check(not click(menu, eye_order_target), "Settings eye order is disabled for mono video")
-	check(choose_setting(menu, "audio_track", 2) and video.audio_track_id == 2, "Audio dropdown selects native track IDs directly")
+	check(click(menu, 10) and click(menu, 111) and choose_setting(menu, "audio_track", 2) and video.audio_track_id == 2 and click(menu, 11), "Audio dropdown selects native track IDs directly")
 	check(not Menu.OPERATIONS[1].has("subtitle_back") and not Menu.OPERATIONS[1].has("subtitle_next")
-		and Menu.HEADINGS.has("Subtitles"), "Settings groups subtitle layout without duplicate track controls")
+		and not Menu.HEADINGS.has("Subtitles") and not Menu.OPERATIONS[1].has("audio") and not Menu.OPERATIONS[1].has("depth_strength"), "Settings omit duplicate track and depth controls")
 	check(click(menu, 10) and click(menu, 110) and menu._subtitle_open and video.subtitles.requested_track == 0, "CC opens choices without changing subtitle selection")
 	check(menu._subtitle_ids.values() == [0, 1, 3], "Picker shows Off and every supported text track, skipping bitmap subtitles")
 	check(click(menu, Menu.SUBTITLE_ROW + 2) and video.subtitles.requested_track == 3 and host.calls.back() == ["subtitle", 7, 3]
@@ -367,7 +366,7 @@ func _run() -> void:
 	check(host.calls.size() == full_sbs_calls, "Full-to-half SBS changes display without rebuilding decoder")
 	check(click(menu, Menu.MODE_STEREO + 6) and video.stereo_layout() == 4 and video.top_bottom, "Half TB tile changes packing axis")
 	check(click(menu, Menu.MODE_PROJECTION + 2) and video.geometry == 2 and video.stereo_layout() == 4, "Fisheye preserves a half top-bottom source")
-	check(click(menu, 11) and menu._caption("eyes") == "T / B", "Settings describes top-bottom eye order")
+	check(click(menu, 11) and click(menu, Menu.PLAYBACK_SETTINGS) and menu._caption("eyes") == "T / B", "Settings describes top-bottom eye order")
 	var order_calls := host.calls.size()
 	check(click(menu, eye_order_target) and video.swap_eyes and menu._caption("eyes") == "B / T", "Settings swaps actual top-bottom eye order")
 	check(host.calls.size() == order_calls and click(menu, eye_order_target) and not video.swap_eyes, "Swapping eye order needs no decoder rebuild and can restore normal")
@@ -376,13 +375,13 @@ func _run() -> void:
 	check(click(menu, Menu.MODE_STEREO + 6) and video.mode_lock.is_empty(), "Half TB lock toggles off")
 	check(click(menu, Menu.MODE_STEREO + 1) and not video.stereo_half and not video.top_bottom, "Full SBS clears both half and TB")
 	check(shown.call(112) and not click(menu, 112) and not video.depth_requested, "Native stereo keeps the depth shortcut visible but disabled")
-	check(click(menu, 11) and menu._caption("eyes") == "L / R" and click(menu, eye_order_target) and video.swap_eyes and menu._caption("eyes") == "R / L", "Settings swaps actual SBS eye order")
+	check(click(menu, 11) and click(menu, Menu.PLAYBACK_SETTINGS) and menu._caption("eyes") == "L / R" and click(menu, eye_order_target) and video.swap_eyes and menu._caption("eyes") == "R / L", "Settings swaps actual SBS eye order")
 	check(click(menu, 10) and click(menu, Menu.MODE), "Eye settings return to the mode popup")
 	check(click(menu, Menu.MODE_PROJECTION + 1) and video.geometry == 1, "Projection tile sets actual video geometry")
 	check(click(menu, 108), "Recenter routed through preview-safe Main")
 	var layout_calls := host.calls.size()
-	check(click(menu, 110) and menu._subtitle_open and menu.choices.sliders.size() == 2,
-		"VR CC popup includes distance and angle sliders")
+	check(click(menu, 110) and menu._subtitle_open and menu.choices.sliders.size() == 3,
+		"VR CC popup includes distance, angle and size sliders")
 	check(choose_setting(menu, "subtitle_position", -60) and video.subtitle_position == -60 and main.settings.get_value("subtitles", "elevation_degrees") == -60 and menu._subtitle_open,
 		"CC angle applies and persists while keeping the popup open")
 	check(choose_setting(menu, "subtitle_distance", 2.0) and is_equal_approx(video.subtitle_distance, 2.0) and menu._subtitle_open,
@@ -395,16 +394,14 @@ func _run() -> void:
 		"Vertical mode places the angle horizontally in video coordinates")
 	choose_setting(menu, "subtitle_direction", 0)
 	check(host.calls.size() == layout_calls, "Changing subtitle layout never switches tracks or rebuilds playback")
-	check(click(menu, 110) and click(menu, 11) and click(menu, 104), "Settings opens the shared VR subtitle editor")
-	menu.press_pointer("right_hand", menu.to_global(Vector3(0.63, -0.05, 1)), -menu.global_basis.z, true)
-	menu.release_pointer("right_hand", Vector3.ZERO, Vector3.ZERO, true)
-	check(video.subtitle_position == 60 and main._library_settings().subtitle_position == 60
-		and main.settings.get_value("subtitles", "elevation_degrees") == 60, "Playback and global settings share subtitle angle")
+	check(choose_setting(menu, "subtitle_position", 60) and video.subtitle_position == 60 and main._library_settings().subtitle_position == 60, "CC and global settings share the VR angle")
 	main._on_setting_changed("subtitle_position", 0)
 	menu.refresh_values()
-	check(is_equal_approx(menu._adjust_rows[451].knob.position.x, 0.33),
-		"External position changes refresh the active editor's centre knob")
-	check(click(menu, 400) and click(menu, 10), "Return from subtitle editor to transport bar")
+	for target in menu.choices.sliders:
+		if menu.choices.targets[target].key == "subtitle_position":
+			var slider: Dictionary = menu.choices.sliders[target]
+			check(is_equal_approx(slider.knob.position.x, slider.left + slider.width / 2), "External position changes refresh the CC centre knob")
+	check(click(menu, 110), "Close CC to return to transport")
 	# Lock: a lit tile pressed again locks projection and layout, both marked; again unlocks.
 	var locks := func() -> int:
 		var count := 0

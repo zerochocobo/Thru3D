@@ -43,6 +43,7 @@ func _run() -> void:
 	video.set_process(false)
 	video.platform = Host.new()
 	video.media.begin(7)
+	video.media.playback = {"details": {"subtitle_tracks": [{"id": 9, "codec": "subrip"}]}}
 	video.media.last_pair = {"session_id": 7, "generation": 3, "source_epoch": 2, "mpv_source_handle": 55}
 	video.subtitles.select(9)
 	video._flat.size = Vector2(1.9, 1)

@@ -98,6 +98,7 @@ internal class SmbLibrary(private val context: Context, private val streams: () 
                 if (name.endsWith("$")) continue // administrative shares
                 val childPath = if (clean.isEmpty()) name else "$clean/$name"
                 if (child.isDirectory) entries.put(JSONObject().put("id", childPath).put("title", name).put("container", true)
+                    .put("modified", child.lastModified().takeIf { it > 0 } ?: -1)
                     .put("delete_uri", "smb://$id/$childPath").put("can_delete", clean.isNotEmpty() && child.attributes and 0x401 == 0)
                     .put("delete_reason", "File deletion unavailable for this source"))
                 else if (MediaKinds.supported(name)) entries.put(JSONObject().put("id", childPath).put("title", name).put("kind", MediaKinds.kind(name))

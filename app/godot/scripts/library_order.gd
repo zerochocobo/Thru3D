@@ -11,7 +11,7 @@ static func before(a: Dictionary, b: Dictionary, order: String) -> bool:
 	var folder_b := b.has("container")
 	if folder_a != folder_b: return folder_a
 	var field := order.get_slice("_", 0)
-	if field != "name" and not folder_a:
+	if field == "modified" or (field == "size" and not folder_a):
 		var av := int(a.get(field, -1))
 		var bv := int(b.get(field, -1))
 		if (av < 0) != (bv < 0): return bv < 0

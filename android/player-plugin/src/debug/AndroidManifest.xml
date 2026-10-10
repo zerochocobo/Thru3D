@@ -14,9 +14,11 @@
                 <action android:name="com.wapok.thru3d.DEBUG_RVM_STANDALONE" />
                 <action android:name="com.wapok.thru3d.DEBUG_RVM" />
                 <action android:name="com.wapok.thru3d.DEBUG_DLNA" />
+                <action android:name="com.wapok.thru3d.DEBUG_PLEX_NETWORK" />
                 <action android:name="com.wapok.thru3d.DEBUG_CLOUD" />
                 <action android:name="com.wapok.thru3d.DEBUG_DEPTH_BENCH" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_CORE" />
+                <action android:name="com.wapok.thru3d.DEBUG_MPV_DOLBY" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_GPU" />
                 <action android:name="com.wapok.thru3d.DEBUG_MPV_SOURCE" />
                 <action android:name="com.wapok.thru3d.DEBUG_PLAYER_MPV" />

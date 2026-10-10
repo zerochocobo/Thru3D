@@ -35,7 +35,7 @@ func _run() -> void:
 	root.add_child(menu)
 	menu.toggle()
 	menu._activate(110)
-	check(menu.choices.sliders.size() == 2 and menu.choices.opened.is_empty(), "CC uses two direct sliders")
+	check(menu.choices.sliders.size() == 3 and menu.choices.opened.is_empty(), "CC uses angle, distance and text-size sliders")
 	for target in menu.choices.sliders.keys():
 		var slider: Dictionary = menu.choices.sliders[target]
 		var key: String = menu.choices.targets[target].key

@@ -79,8 +79,8 @@ internal class DlnaLibrary(
                 references[uri] = JSONObject().put("uri", uri).put("object_id", entry.getString("id"))
                     .put("server", selected.json()).put("subtitles", entry.optJSONArray("subtitles") ?: JSONArray())
             }
-            // A Browse page can contain 1000 items; keep every displayed item available in memory.
-            while (references.size > 2048) references.remove(references.keys.first())
+            // Keep every video in the complete displayed directory available for subtitle selection.
+            while (references.size > DlnaClient.MAX_BROWSE_ITEMS) references.remove(references.keys.first())
             // Reference caching must never turn a successful browse into an error.
             runCatching { store() }
         }

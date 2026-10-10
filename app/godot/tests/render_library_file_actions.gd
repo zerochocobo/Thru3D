@@ -14,7 +14,7 @@ func _run() -> void:
 	menu.visible = true
 	for language in ["zh","en"]:
 		menu.I18n.use(language)
-		for view in ["settings", "disabled", "enabled", "edit", "sort", "cloud_sort", "folder", "cloud_folder", "cloud_file", "rename_input", "rename_preview"]:
+		for view in ["settings", "disabled", "enabled", "edit", "sort", "folder_sort", "dlna", "dlna_sort", "cloud_sort", "folder", "cloud_folder", "cloud_file", "rename_input", "rename_preview"]:
 			menu.file_actions.reset(); menu.file_actions.set_enabled(view != "disabled" and view != "settings")
 			menu.section = Menu.Section.LOCAL; menu._local_all_files = true
 			menu._local_stack = [{"id":"/storage/emulated/0/Movies", "title":"视频 Movies"}]
@@ -26,9 +26,16 @@ func _run() -> void:
 			if view == "cloud_sort":
 				menu.section = Menu.Section.CLOUD; menu._cloud_stack = [{"id":"/account","title":"Cloud"}]
 				menu._cloud_entries = [{"title":"Cloud.mp4","uri":"cloud://account/Cloud.mp4","size":1000,"modified":100}]
+			if view == "folder_sort":
+				menu._local_entries = [{"id":"/storage/emulated/0/Movies/a","title":"演唱会","container":true,"modified":100}]
+			if view.begins_with("dlna"):
+				menu.section = Menu.Section.DLNA; menu._dlna_server = "uuid:test"
+				menu._dlna_servers = [{"id":"uuid:test","name":"家庭媒体库","manual":true}]
+				menu._dlna_stack = [{"id":"10","title":"视频"},{"id":"20","title":"旅行"},{"id":"30","title":"日本"}]
+				menu._dlna_entries = [{"id":"2","title":"旅行 02","container":true}, {"id":"10","title":"旅行 10","container":true}, {"id":"video","title":"演唱会.mp4","uri":"http://nas/concert.mp4"}]
 			menu.refresh()
 			if view == "edit": menu.file_actions.editing = true; menu.file_actions.selected = "file:///storage/emulated/0/Movies/travel.mp4"
-			if view in ["sort", "cloud_sort"]: menu.file_actions.modal = "sort"
+			if view in ["sort", "folder_sort", "dlna_sort", "cloud_sort"]: menu.file_actions.modal = "sort"
 			if view == "folder":
 				menu.file_actions.modal = "delete"; menu.file_actions.plan_ready = true
 				menu.file_actions.target = {"title":"演唱会","uri":"file:///storage/emulated/0/Movies/concert","folder":true,"files":25,"folders":3}
@@ -47,5 +54,5 @@ func _run() -> void:
 			var image := viewport.get_texture().get_image()
 			image.save_png(output.path_join(language + "-" + view + ".png"))
 	menu.queue_free(); viewport.queue_free(); await process_frame; platform.free()
-	print("Library file action previews: 22 frames")
+	print("Library file action previews: 28 frames")
 	quit(0)

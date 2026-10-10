@@ -68,6 +68,7 @@ internal class MpvVideoBridge(
         @Volatile var owner: EGLContext? = null
         @Volatile var closing = false
         @Volatile var playing = true
+        var speed = 1.0 // synchronized(host), retained across processing revisions
         @Volatile var audioEnabled = audio
         @Volatile var audioAvailable = audio
         @Volatile var descriptor: ParcelFileDescriptor? = null
@@ -203,6 +204,7 @@ internal class MpvVideoBridge(
                             captions.flatMap { listOf(it.location, it.title) }.toTypedArray(), host.exactStart)
                         check(host.handle > 0)
                         host.markStartup("native_created_ms")
+                        synchronized(host) { check(MpvSourceNative.setSpeed(host.handle, host.speed)) }
                         MpvSourceNative.setFrameCap(host.handle, frameCap(session))
                         MpvSourceNative.setDirect(host.handle, direct(session))
                         // Native creation stays paused until focus policy has
@@ -266,6 +268,16 @@ internal class MpvVideoBridge(
         if (!playing && session.host.handle > 0) MpvSourceNative.setPlaying(session.host.handle, false)
         refreshPlayback(explicit = playing)
     }
+    fun setSpeed(id: Int, speed: Double): Boolean {
+        if (!speed.isFinite() || speed !in 0.25..3.0) return false
+        val session = sessions[id] ?: return false
+        synchronized(session.host) {
+            if (!active(session) || session.host.closing) return false
+            if (session.host.handle > 0 && !MpvSourceNative.setSpeed(session.host.handle, speed)) return false
+            session.host.speed = speed
+            return true
+        }
+    }
     fun setAudio(id: Int, trackId: Int, volume: Double, muted: Boolean): Boolean {
         val session = sessions[id] ?: return false
         if (!active(session) || session.host.handle <= 0) return false
@@ -292,6 +304,12 @@ internal class MpvVideoBridge(
         if (text.isEmpty() || !active(session)) return ""
         return JSONObject(text).put("session_id", session.id).put("generation", session.scope.generation)
             .put("mpv_source_handle", session.host.handle).put("required_command_id", session.host.subtitleCommand).toString()
+    }
+    fun subtitleBitmap(id: Int, version: Long): ByteArray {
+        val session = sessions[id] ?: return ByteArray(0)
+        if (!active(session) || session.host.handle <= 0 || version <= 0) return ByteArray(0)
+        val pixels = MpvSourceNative.subtitleBitmap(session.host.handle, version)
+        return if (active(session)) pixels else ByteArray(0)
     }
     private fun refreshPlayback(explicit: Boolean = false) {
         worker.post {

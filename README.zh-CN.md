@@ -1,10 +1,10 @@
 # Thru3D Media Player
 
-[English](README.md)
+[English](README.md) · [更新日志](CHANGELOG.zh-CN.md) · [English changelog](CHANGELOG.md)
 
 面向 Meta Quest 和 PICO 的独立 Android VR/MR 媒体播放器。使用 Godot OpenXR 构建界面，Kotlin 管理媒体与授权，libmpv/FFmpeg 解码，MNN OpenCL 执行人物抠像与深度推理。
 
-当前源码版本：**0.5.0**，Android versionCode **10**；另提供实验性的标准 OpenXR Android 导出目标。
+当前源码版本：**0.5.1**，Android versionCode **11**；另提供实验性的标准 OpenXR Android 导出目标。
 
 最低兼容目标为 **Quest 2、PICO Neo3**。源码和构建兼容不等于所有机型的性能、显示及交互均已实机验收。
 
@@ -14,7 +14,10 @@
 - 支持的 180° 视频人物抠像与透视合成。
 - 平面单目视频、照片的深度 2D→3D 显示。
 - 本地文件、SMB、WebDAV、DLNA、媒体服务器，以及115、百度、阿里云盘、夸克和OneDrive连接。
-- 音轨、字幕、播放控制、逐文件观看偏好。
+- 音轨、文字字幕与平面视频PGS位图字幕、0.25×～3×倍速/音高补偿和逐文件观看偏好。
+- Plex手机/电脑配对、片库浏览与原片播放。
+- 兼容设备上的Dolby Vision Profile 5颜色处理；不泛化全部格式、杜比认证或原生HDR。
+- 视频旋转、平面距离/大小/曲率及文字字幕字号/位置；画面旋转时字幕保持正立。
 - 手柄射线/扳机选择、手部交互及中英日界面。
 - 持久化时间点书签、最近播放源帧预览、分页浏览。
 - 手部/手柄可视化、锐度及平面屏幕调整。

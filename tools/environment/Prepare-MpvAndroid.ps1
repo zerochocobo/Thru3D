@@ -7,8 +7,11 @@ if ($Candidate -eq 'SourceFrame') {
     if (-not (Test-Path -LiteralPath $sourceManifestPath)) { throw 'Compile and export the source-frame candidate first.' }
     $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
     $patch = Get-Content (Join-Path $workspace 'native\mpv\patches\source-frame-manifest.json') -Raw | ConvertFrom-Json
-    if ($sourceManifest.candidate -ne 'source-frame' -or $sourceManifest.api_version -ne 1 -or
+    if ($sourceManifest.candidate -ne 'source-frame' -or $sourceManifest.api_version -ne $patch.api_version -or
         $sourceManifest.patch_sha256 -ne $patch.patch_sha256 -or
+        $sourceManifest.pgs_bitmap_patch_sha256 -ne (Get-FileHash (Join-Path $workspace 'native\mpv\patches\0003-mpv-pgs-bitmap.patch')).Hash.ToLowerInvariant() -or
+        $sourceManifest.pgs_bitmap_header_sha256 -ne (Get-FileHash (Join-Path $workspace 'native\mpv\include\mpv\quest_subtitle.h')).Hash.ToLowerInvariant() -or
+        $sourceManifest.dovi_rpu_patch_sha256 -ne (Get-FileHash (Join-Path $workspace 'native\mpv\patches\0002-ffmpeg-profile5-rpu.patch')).Hash.ToLowerInvariant() -or
         $sourceManifest.source_lock_sha256 -ne (Get-FileHash (Join-Path $workspace 'third_party\mpv\source-lock.json')).Hash.ToLowerInvariant() -or
         $sourceManifest.private_header_sha256 -ne (Get-FileHash (Join-Path $workspace 'native\mpv\include\mpv\quest_frame.h')).Hash.ToLowerInvariant()) {
         throw 'Source-frame candidate inputs differ from the current locked source/ABI.'

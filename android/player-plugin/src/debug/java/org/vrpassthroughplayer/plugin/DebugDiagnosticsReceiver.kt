@@ -44,6 +44,10 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                         val provider = intent.getStringExtra("provider") ?: CloudDrive.P115
                         if (provider == CloudDrive.P115) CloudPlaybackProbe.request(context.applicationContext, request, intent.getBooleanExtra("play", false))
                         else OpenListCloudProbe.request(context.applicationContext, request, provider, intent.getBooleanExtra("play", false))
+                    } else if (intent.action == "com.wapok.thru3d.DEBUG_PLEX_NETWORK") {
+                        val raw = intent.getStringExtra("connections") ?: error("Missing connections")
+                        report.put("plex_network", PlexNetworkProbe.run(context.applicationContext, request, raw))
+                        1
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_DLNA") {
                         // Same discovery as the library menu; results go to logcat tag QuestDlna.
                         val app = context.applicationContext
@@ -63,6 +67,11 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                         LocalAccessProbe.request(context.applicationContext, intent.getStringExtra("case") ?: "file_present")
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_LOCAL_SELECTION") {
                         LocalSelectionProbe.request(context.applicationContext, intent.getStringExtra("case") ?: "unicode")
+                    } else if (intent.action == "com.wapok.thru3d.DEBUG_MPV_DOLBY") {
+                        MpvDolbyDiagnostics.request(context.applicationContext,
+                            intent.getStringExtra("fixture") ?: "dovi_profile5.mkv",
+                            intent.getBooleanExtra("direct", false), intent.getBooleanExtra("audio", false),
+                            intent.getBooleanExtra("hardware", true), intent.getBooleanExtra("pixels_only", false))
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_MPV_URI") {
                         MpvDiagnostics.requestExternal(context.applicationContext)
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_MPV_SHARED") {

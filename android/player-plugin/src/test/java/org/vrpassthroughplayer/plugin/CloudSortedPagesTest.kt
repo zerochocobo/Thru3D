@@ -58,6 +58,32 @@ class CloudSortedPagesTest {
         assertEquals("2", cache.page(client, "/", 0, false, "name_asc").files.single().id)
         assertEquals(2, client.calls)
     }
+    @Test fun folderTimesSortBothWaysWithUnknownsLastAndNaturalNameTies() {
+        val files = listOf(
+            CloudFile("A10", true, 900, "10", modified = 100),
+            CloudFile("Unknown", true, 800, "unknown"),
+            CloudFile("B", true, 100, "b", modified = 300),
+            CloudFile("A2", true, 700, "2", modified = 100),
+            CloudFile("New.mp4", false, 1, "new", modified = 999),
+            CloudFile("Old.mp4", false, 1, "old", modified = 1),
+            CloudFile("Unknown.mp4", false, 1, "file-unknown"))
+        fun ids(order: String) = files.sortedWith(CloudSortedPages.comparator(order)).map { it.id }
+        assertEquals(listOf("2", "10", "b", "unknown", "old", "new", "file-unknown"), ids("modified_asc"))
+        assertEquals(listOf("b", "2", "10", "unknown", "new", "old", "file-unknown"), ids("modified_desc"))
+        for (order in listOf("size_asc", "size_desc"))
+            assertEquals(listOf("2", "10", "b", "unknown"), ids(order).take(4))
+        assertEquals(listOf("unknown", "b", "10", "2"), ids("name_desc").take(4))
+    }
+    @Test fun folderTimeOrderIsGlobalAcrossPageBoundaries() {
+        val client = Client((1..100).map { CloudFile("Folder$it", true, 0, "$it", modified = it.toLong()) }
+            + CloudFile("Newest.mp4", false, 1, "file", modified = 9999))
+        val pages = CloudSortedPages()
+        assertEquals("100", pages.page(client, "/", 0, false, "modified_desc").files.first().id)
+        assertEquals("52", pages.page(client, "/", 48, false, "modified_desc").files.first().id)
+        assertEquals(listOf("4", "3", "2", "1", "file"), pages.page(client, "/", 96, false, "modified_desc").files.map { it.id })
+        assertEquals("1", pages.page(client, "/", 0, false, "modified_asc").files.first().id)
+        assertEquals(3, client.calls)
+    }
     @Test fun sourceOrderReadsOnlyOnePageEvenInVeryLargeDirectories() {
         val client = Client((1..20_001).reversed().map { CloudFile("$it.mp4", false, 1, "$it") })
         val page = CloudSortedPages().page(client, "/", 0, false, "source")

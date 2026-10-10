@@ -11,6 +11,16 @@ func centroid(image: Image) -> Vector2:
 			mass += w; total += Vector2(x, y) * w
 	if mass < 2: failures.append("Projected text is missing")
 	return total / maxf(mass, 0.001)
+func glyph_bounds(image: Image) -> Rect2i:
+	var bounds := Rect2i()
+	var found := false
+	for y in range(240, 565):
+		for x in range(150, 1100):
+			var pixel := image.get_pixel(x, y)
+			if minf(pixel.r, minf(pixel.g, pixel.b)) <= 0.85: continue
+			if not found: bounds = Rect2i(x, y, 1, 1); found = true
+			else: bounds = bounds.merge(Rect2i(x, y, 1, 1))
+	return bounds
 func _initialize(): call_deferred("_run")
 func _run():
 	var output := OS.get_environment("PROJECTED_SUBTITLE_OUTPUT")
@@ -48,6 +58,7 @@ func _run():
 	video.material.set_shader_parameter("sharpness", 0)
 	var samples: Array[Dictionary] = []
 	var motion_samples: Array[Dictionary] = []
+	var roll_samples: Array[Dictionary] = []
 	for direction in [0, 1]:
 		video.subtitle_direction = direction
 		for geometry in [1, 2, 3]:
@@ -106,6 +117,36 @@ func _run():
 			video.reset_view()
 			head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
 			video._center_on_view()
+	# Both eyes must retain upright glyph bounds at every supported immersive projection.
+	var overlay_probe := Shader.new()
+	overlay_probe.code = video._subtitle_material.shader.code.replace("void vertex() {", "uniform int probe_eye = 0;\nvoid vertex() {").replace("physical_eye = int(VIEW_INDEX);", "physical_eye = probe_eye;")
+	video._subtitle_material.shader = overlay_probe
+	video.caption.text = "中文 ABC"
+	video.subtitle_distance = 5.0
+	video.subtitle_position = 0.0
+	video.material.set_shader_parameter("alpha_enabled", true)
+	for geometry in [1, 2, 3]:
+		video.geometry = geometry
+		video._apply_geometry()
+		for direction in [0, 1]:
+			video.subtitle_direction = direction
+			for index in 2:
+				eye.position.x = (index - 0.5) * 0.063
+				video.material.set_shader_parameter("probe_eye", index)
+				video._subtitle_material.set_shader_parameter("probe_eye", index)
+				var baseline := Rect2i()
+				for angle in [0, -90, 90]:
+					video.set_screen_rotation(angle)
+					video._place_caption()
+					video._sync_subtitle_surface()
+					await process_frame
+					await RenderingServer.frame_post_draw
+					await RenderingServer.frame_post_draw
+					var bounds := glyph_bounds(viewport.get_texture().get_image())
+					if angle == 0: baseline = bounds
+					if bounds.size.x == 0 or bounds != baseline: failures.append("Roll rotates or moves VR glyphs")
+					roll_samples.append({"geometry": geometry, "direction": direction, "eye": index, "roll": angle, "bounds": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y]})
+		video.set_screen_rotation(0)
 	video.projected_subtitles.clear(video.material)
 	video.material.set_shader_parameter("alpha_enabled", true)
 	await RenderingServer.frame_post_draw
@@ -117,7 +158,7 @@ func _run():
 			var c := dark.get_pixel(x,y)
 			if minf(c.r,minf(c.g,c.b))>0.8: bright+=1
 	if bright != 0: failures.append("CC Off leaves projected glyphs")
-	var report := {"state":"passed" if failures.is_empty() else "failed","samples":samples,"motion_samples":motion_samples,"failures":failures,"scope":"Production video shader + actual glyph pixels, two desktop eye cameras and head pose changes; native XR acceptance remains separate"}
+	var report := {"state":"passed" if failures.is_empty() else "failed","samples":samples,"motion_samples":motion_samples,"roll_samples":roll_samples,"failures":failures,"scope":"Production video shader + actual glyph pixels, two desktop eye cameras and head pose changes; native XR acceptance remains separate"}
 	FileAccess.open(output.path_join("verification.json"),FileAccess.WRITE).store_string(JSON.stringify(report,"\t"))
 	print(JSON.stringify(report))
 	viewport.queue_free()

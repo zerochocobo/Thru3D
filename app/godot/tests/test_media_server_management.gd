@@ -18,8 +18,8 @@ func _run() -> void:
 	b.capabilities = {"navigation":["genres","tags","folders"], "facets":["genres","tags"], "filters":["watched"], "search":true}
 	menu.account_panel.open("server")
 	check(is_equal_approx(menu._pitch(), menu.ROW_PITCH) and menu._lines() == menu.VISIBLE_ROWS, "account views use account list geometry, not home-grid spacing")
-	var choices: Array = menu._buttons.filter(func(button): return button.target >= Menu.ROW_BASE + 1 and button.target <= Menu.ROW_BASE + 4)
-	check(choices.size() == 4 and choices.all(func(button): return button.enabled and button.node.visible), "four server choices fit without scrolling")
+	var choices: Array = menu._buttons.filter(func(button): return button.target >= Menu.ROW_BASE + 1 and button.target <= Menu.ROW_BASE + 5)
+	check(choices.size() == 5 and choices.all(func(button): return button.enabled and button.node.visible), "five server choices fit without scrolling")
 	check(choices[0].rect.position.x != choices[1].rect.position.x and is_equal_approx(choices[0].rect.position.y, choices[1].rect.position.y), "server choices use two compact columns")
 	check(choices[0].rect.position.y - choices[2].rect.position.y < 0.30, "chooser rows are not sparse")
 	check(not menu._buttons.any(func(button): return button.target >= Browser.ACTION + 100 and button.target < Browser.ACTION + 110), "chooser has no media navigation")

@@ -1,8 +1,9 @@
-﻿extends "res://scripts/media_surface.gd"
+extends "res://scripts/media_surface.gd"
 
 signal changed
 signal thumbnail_ready(uri: String)
 
+const PlatformMethods := preload("res://scripts/platform_methods.gd")
 const State := preload("res://scripts/mpv_media_state.gd")
 const Thumbnails := preload("res://scripts/thumbnail_cache.gd")
 const Binding := preload("res://scripts/pair_texture_binding.gd")
@@ -14,6 +15,8 @@ var _last_seek_mode := SeekPolicy.SPEED
 const Log := preload("res://scripts/diagnostic_log.gd")
 const PixelProbe := preload("res://scripts/mpv_pixel_probe.gd")
 const SubtitleState := preload("res://scripts/mpv_subtitle_state.gd")
+const BitmapSubtitles := preload("res://scripts/bitmap_subtitles.gd")
+var bitmap_subtitles := BitmapSubtitles.new()
 const ModeMemory := preload("res://scripts/file_mode_memory.gd")
 const RecentFiles := preload("res://scripts/recent_files.gd")
 const BookmarkStore := preload("res://scripts/bookmark_store.gd")
@@ -65,6 +68,13 @@ var audio_muted := false
 var subtitles := SubtitleState.new()
 ## Text subtitles: on the flat screen near its lower edge; in immersive modes floating at
 ## a video-local projection with stereo disparity controlled by [subtitle_distance].
+var playback_speed := 1.0
+var subtitle_size := 1.0:
+	set(value): subtitle_size = clampf(value, 0.5, 2.0) if is_finite(value) else 1.0
+var subtitle_flat_position := 0.0:
+	set(value): subtitle_flat_position = clampf(value, 0.0, 1.0) if is_finite(value) else 0.0
+var _subtitle_surface: MeshInstance3D
+var _subtitle_material: ShaderMaterial
 var caption: Label3D
 const ColorGrade := preload("res://scripts/color_grade.gd")
 var color_grade := ColorGrade.new()
@@ -144,6 +154,13 @@ func _ready() -> void:
 	add_child(caption)
 	projected_subtitles = ProjectedSubtitles.new()
 	add_child(projected_subtitles)
+	_subtitle_surface = MeshInstance3D.new()
+	_subtitle_material = ShaderMaterial.new()
+	_subtitle_material.shader = preload("res://shaders/subtitle_surface.gdshader")
+	_subtitle_material.render_priority = 1
+	_subtitle_surface.material_override = _subtitle_material
+	_subtitle_surface.visible = false
+	add_child(_subtitle_surface)
 	if OS.get_name() == "Android" and Engine.has_singleton("QuestPlayer"):
 		platform = Engine.get_singleton("QuestPlayer")
 		platform.connect("local_video_selected", _on_selected)
@@ -448,6 +465,9 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 	var id: int = platform.open_mpv_video(uri, maxi(start_ms, 0), stereo_sbs, profile, alpha_requested, true, depth_requested,
 		stereo_sbs and top_bottom, SeekPolicy.normalize(seek_mode) == SeekPolicy.EXACT)
 	media.begin(id)
+	playback_speed = 1.0
+	screen_rotation = 0.0
+	if PlatformMethods.supports(platform, "set_mpv_speed"): platform.set_mpv_speed(id, playback_speed)
 	_open_trace.append({"stage": "dispatched", "time_ms": Time.get_ticks_msec(), "session_id": id})
 	_remember_file = restore_mode and id > 0
 	_history_started = false
@@ -456,6 +476,8 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 	_clone_applied = false
 	subtitles.select(0)
 	subtitles.clear(true)
+	bitmap_subtitles.clear(material)
+	if _subtitle_surface: _subtitle_surface.visible = false
 	reset_view() # every video starts straight ahead at its natural size
 	_audio_pending = id > 0
 	if id <= 0:
@@ -508,6 +530,8 @@ func close_video() -> void:
 	control.close()
 	_remember_file = false
 	subtitles.clear(true)
+	bitmap_subtitles.clear(material)
+	if _subtitle_surface: _subtitle_surface.visible = false
 	changed.emit()
 
 func checkpoint_playback() -> void:
@@ -552,6 +576,8 @@ func _request_revision(position_ms: int = -1, mode: String = "") -> void:
 	platform.set_mpv_playing(media.session_id, false)
 	_waiting_first = true
 	subtitles.clear()
+	bitmap_subtitles.clear(material)
+	if _subtitle_surface: _subtitle_surface.visible = false
 	if caption:
 		caption.visible = false
 	if position_ms >= 0: _seek_event("requested")
@@ -740,6 +766,13 @@ func toggle_clone_voice() -> bool:
 func alpha_ready() -> bool:
 	return alpha_enabled and not media.last_pair.is_empty() and media.last_pair.get("inference_ran", false)
 
+func set_playback_speed(value: float) -> bool:
+	if not is_finite(value) or value < 0.25 or value > 3.0 or not media.accepts(media.session_id): return false
+	if not PlatformMethods.supports(platform, "set_mpv_speed") or not platform.set_mpv_speed(media.session_id, value): return false
+	playback_speed = value
+	changed.emit()
+	return true
+
 func toggle_play() -> void:
 	if media.state == "ended":
 		requested_play = true
@@ -854,9 +887,13 @@ func bookmark_action(operation: String, marker_id: String, scope: String) -> Str
 func set_subtitle_track(track_id: int) -> bool:
 	if track_id < -1 or not platform or not media.accepts(media.session_id):
 		return false
+	if track_id > 0 and not subtitle_tracks().any(func(t): return int(t.id) == track_id):
+		return false
 	if not platform.set_mpv_subtitle(media.session_id, track_id):
 		return false
 	subtitles.select(track_id)
+	bitmap_subtitles.clear(material)
+	if _subtitle_surface: _subtitle_surface.visible = false
 	if caption:
 		caption.visible = false
 	if projected_subtitles:
@@ -864,11 +901,19 @@ func set_subtitle_track(track_id: int) -> bool:
 	changed.emit()
 	return true
 
+func subtitle_tracks() -> Array[Dictionary]:
+	var tracks: Array[Dictionary] = []
+	var details: Dictionary = media.playback.get("details", {})
+	for track in details.get("subtitle_tracks", []):
+		if track is Dictionary and int(track.get("id", 0)) > 0 and SubtitleState.supported_codec(str(track.get("codec", "")),
+			geometry == Geometry.Geometry.FLAT, bool(details.get("pgs_supported", false))):
+			tracks.append(track)
+	return tracks
+
 func cycle_subtitle_track(direction: int = 1) -> bool:
 	var choices: Array[int] = [0]
-	for track in media.playback.get("details", {}).get("subtitle_tracks", []):
-		if track is Dictionary and int(track.get("id", 0)) > 0 and SubtitleState.text_codec(str(track.get("codec", ""))):
-			choices.append(int(track.id))
+	for track in subtitle_tracks():
+		choices.append(int(track.id))
 	if choices.size() == 1:
 		return false
 	return set_subtitle_track(choices[posmod(choices.find(subtitles.requested_track) + direction, choices.size())])
@@ -881,6 +926,8 @@ func _poll_subtitles() -> void:
 	if not ready:
 		caption.visible = false
 		projected_subtitles.clear(material)
+		bitmap_subtitles.clear(material)
+		if _subtitle_surface: _subtitle_surface.visible = false
 		return
 	var now := Time.get_ticks_msec()
 	if now >= _subtitle_poll_ms:
@@ -891,30 +938,48 @@ func _poll_subtitles() -> void:
 			_subtitle_received_ms = now
 	if now - _subtitle_received_ms > 1000:
 		subtitles.clear()
+	if geometry == Geometry.Geometry.FLAT and not subtitles.bitmap.is_empty():
+		var handle := int(subtitles.cue.get("mpv_source_handle", 0))
+		var pixels := PackedByteArray()
+		if bitmap_subtitles.needs_pixels(subtitles.bitmap, handle):
+			pixels = platform.get_mpv_subtitle_bitmap(media.session_id, int(subtitles.bitmap.version))
+		bitmap_subtitles.apply(material, subtitles.bitmap, handle, pixels)
+	else:
+		bitmap_subtitles.clear(material)
+		if _subtitle_surface: _subtitle_surface.visible = false
 	caption.text = subtitles.text
 	caption.visible = not subtitles.text.is_empty()
 	if caption.visible:
 		_place_caption()
 	else:
 		projected_subtitles.clear(material)
+	_sync_subtitle_surface()
 
 func _place_caption() -> void:
 	if geometry == Geometry.Geometry.FLAT:
 		# Ordinary video captions stay on the screen, independent of immersive preferences.
-		var anchor := panel.global_transform * Vector3(0, -_flat.size.y * 0.5 + 0.06, 0.01)
+		var pose := subtitle_transform()
+		caption.font_size = roundi(40 * subtitle_size)
+		caption.outline_size = maxi(2, roundi(8 * subtitle_size))
+		var pixel_size := 0.0016 * screen_scale
+		caption.pixel_size = pixel_size
+		var margin := minf(0.06 * screen_scale, _flat.size.y * 0.1)
+		# Include the actual multiline text height in the usable travel range.
+		caption.width = _flat.size.x * 0.9 / pixel_size
+		var text_height := minf(_flat.size.y - 2 * margin, caption.get_aabb().size.y)
+		var y := lerpf(-_flat.size.y * 0.5 + margin, _flat.size.y * 0.5 - margin - maxf(0.064 * subtitle_size * screen_scale, text_height), subtitle_flat_position)
+		var anchor := pose * Vector3(0, y, 0.01)
 		caption.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 		caption.layers = 1
 		projected_subtitles.clear(material)
 		caption.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-		caption.pixel_size = 0.0016
-		caption.width = _flat.size.x * 0.9 / 0.0016
-		caption.global_transform = Transform3D(panel.global_basis, anchor)
+		caption.global_transform = Transform3D(pose.basis, anchor)
 		return
 	# Anchor in the video's coordinates, like burned-in captions. Head pose never changes it.
-	# Rotating/recentering/zooming the video moves the picture and its captions together.
+	# Direction/recenter/zoom move captions with the video; roll is excluded by the independent surface.
 	var anchor_basis := SubtitleDepth.anchor(subtitle_position, subtitle_direction == 1)
 	caption.layers = 0 # The live text patch is drawn only by the video's shader.
-	projected_subtitles.update_patch(caption, material, anchor_basis, subtitle_distance, ProjectedSubtitles.runtime_ipd(), subtitle_direction == 1)
+	projected_subtitles.update_patch(caption, material, anchor_basis, subtitle_distance, ProjectedSubtitles.runtime_ipd(), subtitle_direction == 1, subtitle_size)
 
 func seek_relative(delta_ms: int) -> bool:
 	if not platform or not media.accepts(media.session_id):
@@ -1352,12 +1417,31 @@ func _write_debug_report() -> void:
 func _source_size() -> Vector2:
 	return Vector2(float(media.format.width), float(media.format.height))
 
+func _sync_subtitle_surface() -> void:
+	if not _subtitle_surface or not material: return
+	var separate := not is_zero_approx(screen_rotation)
+	material.set_shader_parameter("separate_subtitles", separate)
+	_subtitle_surface.visible = separate and panel.visible and (material.get_shader_parameter("subtitle_enabled") == true or material.get_shader_parameter("bitmap_subtitle_enabled") == true)
+	if not _subtitle_surface.visible: return
+	_subtitle_surface.mesh = panel.mesh
+	_subtitle_surface.global_transform = subtitle_transform()
+	for key in ["subtitle_texture", "subtitle_enabled", "subtitle_anchor_inverse", "subtitle_parallax", "subtitle_patch_half_extent", "bitmap_subtitle_texture", "bitmap_subtitle_enabled", "bitmap_subtitle_rect", "rotation_degrees"]:
+		_subtitle_material.set_shader_parameter(key, material.get_shader_parameter(key))
+
 func _pixel_aspect() -> float:
 	return float(media.format.get("pixel_aspect", 1.0))
 
 func _apply_geometry() -> void:
 	super._apply_geometry()
+	if geometry != Geometry.Geometry.FLAT:
+		bitmap_subtitles.clear(material)
+		if _subtitle_surface: _subtitle_surface.visible = false
+		for track in media.playback.get("details", {}).get("subtitle_tracks", []):
+			if track is Dictionary and int(track.get("id", 0)) == subtitles.requested_track and str(track.get("codec", "")) == "hdmv_pgs_subtitle":
+				set_subtitle_track(0)
 	_apply_packed()
+	if caption and caption.visible: _place_caption()
+	_sync_subtitle_surface()
 	material.set_shader_parameter("stereo_sbs", stereo_sbs or _binding.warped)
 	material.set_shader_parameter("depth_enabled", depth_enabled and not _binding.warped)
 	material.set_shader_parameter("depth_shift", DEPTH_SHIFT * depth_strength if depth_requested else 0.0)
@@ -1373,10 +1457,17 @@ func layout_snapshot() -> Dictionary:
 		"top_bottom": stereo_sbs and top_bottom, "stereo_half": stereo_sbs and stereo_half, "fisheye_fov": fisheye_fov,
 		"alpha_requested": alpha_requested, "alpha_enabled": alpha_enabled, "profile": profile,
 		"depth_requested": depth_requested, "depth_enabled": depth_enabled, "depth_strength": depth_strength, "auto_depth": auto_depth,
+		"screen_rotation": screen_rotation, "playback_speed": playback_speed,
 		"alpha_ready": alpha_ready(), "backend": "Android_libmpv", "loop_enabled": loop_enabled,
 		"playback_control": playback, "subtitles": {"requested_track": subtitles.requested_track,
 			"cue": subtitles.cue, "text": subtitles.text,
-			"render_layer": "independent_Label3D" if geometry == Geometry.Geometry.FLAT else "video_projection_overlay",
+			"bitmap_ready": geometry == Geometry.Geometry.FLAT and bitmap_subtitles.texture != null \
+				and bool(material.get_shader_parameter("bitmap_subtitle_enabled")),
+			"bitmap_texture_version": bitmap_subtitles.version,
+			"bitmap_texture_size": [bitmap_subtitles.texture.get_width(), bitmap_subtitles.texture.get_height()] if bitmap_subtitles.texture else [],
+			"render_layer": "flat_PGS_bitmap_overlay" if bitmap_subtitles.texture and geometry == Geometry.Geometry.FLAT \
+				else ("independent_Label3D" if geometry == Geometry.Geometry.FLAT else "video_projection_overlay"),
+			"size": subtitle_size, "flat_position": subtitle_flat_position, "rotation_independent": true,
 			"distance_m": subtitle_distance, "position": subtitle_position, "direction": subtitle_direction,
 			"runtime_ipd_m": ProjectedSubtitles.runtime_ipd(),
 			"angular_parallax_rad": material.get_shader_parameter("subtitle_parallax"),

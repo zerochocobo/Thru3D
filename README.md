@@ -1,10 +1,10 @@
 # Thru3D Media Player
 
-[简体中文](README.zh-CN.md)
+[简体中文](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [中文更新日志](CHANGELOG.zh-CN.md)
 
 Standalone Android VR/MR media player for Meta Quest and PICO. Thru3D combines a Godot OpenXR interface, Android media access, a native libmpv renderer, and MNN inference for video matting and depth-based stereo rendering.
 
-Current source version: **0.5.0** (Android versionCode **10**). An experimental standard OpenXR Android export is also available.
+Current source version: **0.5.1** (Android versionCode **11**). An experimental standard OpenXR Android export is also available.
 
 Minimum compatibility targets are **Quest 2** and **PICO Neo3**. Source/build compatibility does not establish hardware performance or interaction acceptance on every device.
 
@@ -14,7 +14,10 @@ Minimum compatibility targets are **Quest 2** and **PICO Neo3**. Source/build co
 - Person matting and passthrough composition for supported 180° video projections.
 - Depth-based 2D-to-3D viewing for flat mono videos and photos.
 - Local Android document access, SMB, WebDAV, DLNA and media-server libraries; 115, Baidu, Aliyun Drive, Quark and OneDrive connections.
-- Audio tracks, subtitles, playback controls and per-file viewing preferences.
+- Audio tracks, text subtitles and flat-video PGS bitmap subtitles; 0.25×–3× playback speed with pitch correction and per-file viewing preferences.
+- Plex phone/computer pairing and original-file library playback.
+- Dolby Vision Profile 5 color handling on compatible hardware; no blanket profile, certification or native HDR claim.
+- Picture rotation, flat-screen distance/size/curvature and text subtitle sizing/position; subtitles remain upright when the picture rotates.
 - Controller ray/trigger selection and hand interaction; English, Chinese and Japanese UI.
 - Persistent timestamp bookmarks, source-frame previews for recent playback, and paged media navigation.
 - Rendered hands/controllers and display-quality controls, including sharpness and flat-screen adjustments.
@@ -57,7 +60,7 @@ libmpv / FFmpeg → shared GPU video textures → Godot stereo rendering
 ## Getting started
 
 ```powershell
-git clone https://github.com/zerochocobo/Thru3D.git
+git clone https://github.com/zerochocobo/Thru3D-Media-Player.git Thru3D
 cd Thru3D
 python tools/Check-PublicSource.py
 

@@ -70,6 +70,7 @@ func start(type: String, selected_provider: String = "", id: String = "", defaul
 	view = "discover" if type == "discover" else ("dav" if type == "dav" else "form")
 	fields.assign(["name", "base", "username", "password"] if type == "server" or (type == "cloud" and provider == "webdav") else ["name", "username", "password"])
 	if type == "server" and provider == "stash": fields.erase("username")
+	if type == "server" and provider == "plex": fields.assign(["name", "base"])
 	if type == "cloud" and provider not in ["115", "webdav"]: fields.assign(["name"])
 	field = "base" if type == "server" or provider == "webdav" else "username"
 	if not field in fields: field = "name"
@@ -78,13 +79,14 @@ func start(type: String, selected_provider: String = "", id: String = "", defaul
 	menu.scroll = 0.0; poll(); menu.refresh()
 
 func provider_name(value: String) -> String:
-	return {"115": "115", "115_open": "115", "onedrive": "OneDrive", "webdav": "WebDAV", "baidu": I18n.t("Baidu Netdisk"), "aliyun_open": I18n.t("Aliyun Drive"), "quark_open": I18n.t("Quark Netdisk"), "emby": "Emby", "jellyfin": "Jellyfin", "stash": "Stash", "xbvr": "XBVR"}.get(value, value)
+	return {"115": "115", "115_open": "115", "onedrive": "OneDrive", "webdav": "WebDAV", "baidu": I18n.t("Baidu Netdisk"), "aliyun_open": I18n.t("Aliyun Drive"), "quark_open": I18n.t("Quark Netdisk"), "emby": "Emby", "jellyfin": "Jellyfin", "stash": "Stash", "xbvr": "XBVR", "plex": "Plex"}.get(value, value)
 
 func poll() -> void:
 	if session <= 0 or not menu.platform: return
 	var parsed: Variant = JSON.parse_string(menu.platform.account_snapshot(session))
 	if not parsed is Dictionary or parsed.is_empty(): return
 	var previous_wait := int(data.get("sms_wait", 0))
+	var previous_pairing_expired := bool(data.get("pairing_expired", false))
 	data = parsed
 	var state := str(data.get("state", "form"))
 	if state == "done":
@@ -93,13 +95,14 @@ func poll() -> void:
 		if source == "cloud": menu.cloud_accounts.changed()
 		else: menu.server_browser.load_servers(); menu.refresh()
 		return
-	if state in ["captcha", "sms", "web", "dav", "discover"]: view = state
+	if state in ["captcha", "sms", "web", "dav", "discover", "plex_link", "plex_servers"]: view = state
 	if state == "captcha" and int(data.get("challenge_revision", 0)) != challenge_revision:
 		prompt = decode(str(data.get("prompt", ""))); choices = decode(str(data.get("choices", ""))); selected.clear()
 		challenge_revision = int(data.get("challenge_revision", 0))
 	if view == "sms": fields.assign(["sms"]); field = "sms"
 	if view == "discover": items = data.get("result", {}).get("servers", [])
-	var changed := int(data.get("revision", 0)) != revision or previous_wait != int(data.get("sms_wait", 0))
+	if view == "plex_servers": items = data.get("result", {}).get("servers", [])
+	var changed := int(data.get("revision", 0)) != revision or previous_wait != int(data.get("sms_wait", 0)) or previous_pairing_expired != bool(data.get("pairing_expired", false))
 	if view == "web": changed = changed or str(data.get("web", {})) != _web_status
 	_web_status = str(data.get("web", {}))
 	revision = int(data.get("revision", 0))
@@ -145,11 +148,13 @@ func rows() -> Array[Dictionary]:
 			for p in ["115_open", "baidu", "aliyun_open", "quark_open", "onedrive", "webdav"]: result.append({"title": provider_name(p), "icon": "cloud", "account_provider": p})
 		else:
 			result.append({"title": I18n.t("Search local network"), "icon": "refresh", "account_discover": true})
-			for p in ["emby", "jellyfin", "stash", "xbvr"]: result.append({"title": provider_name(p), "icon": "server", "account_provider": p})
+			for p in ["emby", "jellyfin", "plex", "stash", "xbvr"]: result.append({"title": provider_name(p), "icon": "server", "account_provider": p})
 	elif view == "accounts":
 		for item in items: result.append({"title": str(item.name), "detail": provider_name(str(item.provider)), "icon": "edit", "account_edit": item})
 	elif view == "discover":
 		for item in items: result.append({"title": str(item.name) if not str(item.name).is_empty() else I18n.t("Server"), "detail": str(item.base), "icon": "server", "account_found": item})
+	elif view == "plex_servers":
+		for item in items: result.append({"title": str(item.name), "icon": "server", "plex_server": str(item.id)})
 	elif view == "license":
 		for i in range(0, license_lines.size(), 2):
 			result.append({"title": license_lines[i], "detail": license_lines[i + 1] if i + 1 < license_lines.size() else "", "icon": "info", "about_info": true})
@@ -158,6 +163,7 @@ func rows() -> Array[Dictionary]:
 func choose(row: Dictionary) -> bool:
 	if not active(): return false
 	if row.has("account_provider"): start(kind, str(row.account_provider), "", _defaults)
+	elif row.has("plex_server"): command("plex_select", {"server_id": str(row.plex_server)})
 	elif row.has("account_edit"): start(kind, str(row.account_edit.provider), str(row.account_edit.id))
 	elif row.has("account_dav"): start("dav")
 	elif row.has("account_discover"): start("discover")
@@ -214,6 +220,8 @@ func action(target: int) -> bool:
 		24: web_action("zoom_out")
 		25: web_action("scroll", Vector2(0, -1))
 		26: web_action("scroll", Vector2(0, 1))
+		27: command("plex_authorize")
+		28: command("plex_confirm")
 	return true
 
 func input(action_name: String, text: String) -> void:
@@ -223,11 +231,11 @@ func input(action_name: String, text: String) -> void:
 
 func _draw_server_choices() -> void:
 	menu._list = Node3D.new(); menu.add_child(menu._list); menu._decorations.append(menu._list); menu._bar_thumb = null
-	for i in range(1, mini(5, menu.rows.size())):
+	for i in range(1, menu.rows.size()):
 		var k := i - 1; var row: Dictionary = menu.rows[i]
-		menu._button(menu.ROW_BASE + i, str(row.title), Vector2(-0.17 + (k % 2) * 0.65, 0.23 - (k / 2) * 0.25), Vector2(0.60, 0.21), true, "media_library", false, menu._list)
+		menu._button(menu.ROW_BASE + i, str(row.title), Vector2(-0.17 + (k % 2) * 0.65, 0.24 - (k / 2) * 0.19), Vector2(0.60, 0.16), true, "media_library", false, menu._list)
 	if not menu.rows.is_empty():
-		menu._button(menu.ROW_BASE, str(menu.rows[0].title), Vector2(0.155, -0.31), Vector2(1.25, 0.095), true, "", false, menu._list)
+		menu._button(menu.ROW_BASE, str(menu.rows[0].title), Vector2(0.155, -0.36), Vector2(1.25, 0.095), true, "", false, menu._list)
 
 func draw() -> void:
 	if view == "web":
@@ -235,7 +243,7 @@ func draw() -> void:
 	menu._button(BASE, "", Vector2(-0.52, 0.46), Vector2(0.09, 0.07), true, "up")
 	menu._label(I18n.t(title), Vector3(0.13, 0.46, 0.004), 24)
 	var enabled := not bool(data.get("busy", false))
-	if view in ["choose", "accounts", "discover", "license"]:
+	if view in ["choose", "accounts", "discover", "license", "plex_servers"]:
 		if view == "choose" and kind == "server": _draw_server_choices()
 		else: menu._draw_rows()
 		if view == "accounts": menu._button(BASE + 22, "", Vector2(0.8, 0.46), Vector2(0.09, 0.07), true, "plus")
@@ -247,7 +255,10 @@ func draw() -> void:
 			menu._button(BASE + 9, str(wait) + "s" if wait > 0 else I18n.t("Send SMS code"), Vector2(-0.14, 0.15), Vector2(0.42, 0.07), enabled and wait == 0)
 			menu._button(BASE + 10, I18n.t("Verify and sign in"), Vector2(0.4, 0.15), Vector2(0.48, 0.07), enabled and bool(data.get("sms_sent", false)))
 		else:
-			if kind == "server" or provider == "webdav": menu._button(BASE + 6, I18n.t("Test and save"), Vector2(0.3, -0.51), Vector2(0.4, 0.07), enabled, "", true)
+			if kind == "server" and provider == "plex":
+				menu._button(BASE + 27, I18n.t("Authorize"), Vector2(0.17, 0.012), Vector2(0.7, 0.077), enabled, "", true)
+				if _editing_id(): menu._button(BASE + 6, I18n.t("Test and save"), Vector2(0.3, -0.51), Vector2(0.4, 0.07), enabled)
+			elif kind == "server" or provider == "webdav": menu._button(BASE + 6, I18n.t("Test and save"), Vector2(0.3, -0.51), Vector2(0.4, 0.07), enabled, "", true)
 			else:
 				if provider == "115":
 					menu._button(BASE + 7, I18n.t("Sign in on website"), Vector2(-0.15, 0.012), Vector2(0.54, 0.077), enabled)
@@ -256,6 +267,12 @@ func draw() -> void:
 				if _editing_id():
 					menu._button(BASE + 8, "", Vector2(0.73, -0.51), Vector2(0.1, 0.07), enabled and not str(data.get("fields", {}).get("name", "")).strip_edges().is_empty(), "check")
 					menu._tips[BASE + 8] = I18n.t("Save name")
+	elif view == "plex_link":
+		menu._label("plex.tv/link", Vector3(0.15, 0.22, 0.008), 30)
+		menu._label(str(data.get("result", {}).get("code", "")), Vector3(0.15, 0.05, 0.008), 56)
+		menu._label(I18n.t("Pair on phone or computer"), Vector3(0.15, -0.065, 0.008), 17)
+		menu._button(BASE + 28, I18n.t("Confirm pairing" if enabled else "Checking…"), Vector2(0.15, -0.21), Vector2(0.72, 0.09), enabled and data.get("result", {}).has("code") and not bool(data.get("pairing_expired", false)) and str(data.get("error", "")) != "Pairing code expired", "", true)
+		menu._button(BASE + 27, "", Vector2(0.15, -0.34), Vector2(0.12, 0.08), enabled, "refresh")
 	elif view == "captcha": draw_captcha(enabled)
 	elif view == "dav":
 		var result: Dictionary = data.get("result", {})
@@ -273,7 +290,7 @@ func draw() -> void:
 	if error.begins_with("Sign-in declined ("):
 		error = I18n.t("Sign-in declined (%s).").replace("%s", error.trim_prefix("Sign-in declined (").trim_suffix(")."))
 	else: error = I18n.t(error)
-	if bool(data.get("busy", false)): error = I18n.t("Connecting…")
+	if bool(data.get("busy", false)) and view != "plex_link": error = I18n.t("Connecting…")
 	if not error.is_empty(): menu._label(error, Vector3(0.15, 0.375, 0.006), 17)
 
 func _editing_id() -> bool: return bool(data.get("editing_account", false))
@@ -281,6 +298,7 @@ func draw_fields(enabled: bool) -> void:
 	var names := {"name": "Name", "base": "Server address", "username": "Username", "password": "Password", "sms": "SMS code"}
 	if provider == "115": names.username = "115 account / phone number"
 	if provider == "stash": names.password = "API Key"
+	if provider == "plex": names.base = "Server address (optional)"
 	for i in fields.size():
 		var key: String = fields[i]
 		var value := str(data.get("fields", {}).get(key, ""))

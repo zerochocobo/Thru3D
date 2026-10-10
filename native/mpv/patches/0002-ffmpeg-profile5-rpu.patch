@@ -1,0 +1,236 @@
+--- a/libavcodec/mediacodecdec.c
++++ b/libavcodec/mediacodecdec.c
+@@ -45,6 +45,7 @@
+ #include "jni.h"
+ #include "mediacodec_wrapper.h"
+ #include "mediacodecdec_common.h"
++#include "quest_dovi_mediacodec.h"
+ 
+ typedef struct MediaCodecContext {
+ 
+@@ -60,12 +61,14 @@
+     int use_ndk_codec;
+     // Ref. MediaFormat KEY_OPERATING_RATE
+     int operating_rate;
++    QuestDoviContext quest_dovi;
+ } MediaCodecContext;
+ 
+ static av_cold int mediacodec_decode_close(AVCodecContext *avctx)
+ {
+     MediaCodecContext *s = avctx->priv_data;
+ 
++    quest_dovi_close(&s->quest_dovi);
+     ff_mediacodec_dec_close(avctx, s->ctx);
+     s->ctx = NULL;
+ 
+@@ -450,6 +453,7 @@
+         goto done;
+     }
+ 
++    quest_dovi_init(&s->quest_dovi, avctx);
+     s->ctx->delay_flush = s->delay_flush;
+     s->ctx->use_ndk_codec = s->use_ndk_codec;
+ 
+@@ -488,6 +492,13 @@
+     return ret;
+ }
+ 
++static int quest_mediacodec_receive(AVCodecContext *avctx,
++                                    MediaCodecContext *s, AVFrame *frame, int wait)
++{
++    int ret = ff_mediacodec_dec_receive(avctx, s->ctx, frame, wait);
++    return quest_dovi_frame(&s->quest_dovi, avctx, frame, ret);
++}
++
+ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
+ {
+     MediaCodecContext *s = avctx->priv_data;
+@@ -503,7 +514,7 @@
+     }
+ 
+     /* poll for new frame */
+-    ret = ff_mediacodec_dec_receive(avctx, s->ctx, frame, false);
++    ret = quest_mediacodec_receive(avctx, s, frame, false);
+     if (ret != AVERROR(EAGAIN))
+         return ret;
+ 
+@@ -514,7 +525,7 @@
+             index = ff_AMediaCodec_dequeueInputBuffer(s->ctx->codec, 0);
+             if (index < 0) {
+                 /* no space, block for an output frame to appear */
+-                ret = ff_mediacodec_dec_receive(avctx, s->ctx, frame, true);
++                ret = quest_mediacodec_receive(avctx, s, frame, true);
+                 /* Try again if both input port and output port return EAGAIN.
+                  * If no data is consumed and no frame in output, it can make
+                  * both avcodec_send_packet() and avcodec_receive_frame()
+@@ -555,14 +566,19 @@
+ 
+         /* fetch new packet or eof */
+         ret = ff_decode_get_packet(avctx, &s->buffered_pkt);
++        if (ret >= 0) {
++            ret = quest_dovi_packet(&s->quest_dovi, avctx, &s->buffered_pkt);
++            if (ret < 0)
++                return ret;
++        }
+         if (ret == AVERROR_EOF) {
+             AVPacket null_pkt = { 0 };
+             ret = ff_mediacodec_dec_send(avctx, s->ctx, &null_pkt, true);
+             if (ret < 0)
+                 return ret;
+-            return ff_mediacodec_dec_receive(avctx, s->ctx, frame, true);
++            return quest_mediacodec_receive(avctx, s, frame, true);
+         } else if (ret == AVERROR(EAGAIN) && s->ctx->current_input_buffer < 0) {
+-            return ff_mediacodec_dec_receive(avctx, s->ctx, frame, true);
++            return quest_mediacodec_receive(avctx, s, frame, true);
+         } else if (ret < 0) {
+             return ret;
+         }
+@@ -577,6 +593,7 @@
+ 
+     av_packet_unref(&s->buffered_pkt);
+ 
++    quest_dovi_flush(&s->quest_dovi);
+     ff_mediacodec_dec_flush(avctx, s->ctx);
+ }
+ 
+--- a/configure
++++ b/configure
+@@ -3635,7 +3635,7 @@
+ hevc_cuvid_decoder_select="hevc_mp4toannexb_bsf"
+ hevc_d3d12va_encoder_select="cbs_h265 d3d12va_encode"
+ hevc_mediacodec_decoder_deps="mediacodec"
+-hevc_mediacodec_decoder_select="hevc_mp4toannexb_bsf hevc_parser"
++hevc_mediacodec_decoder_select="hevc_mp4toannexb_bsf hevc_parser dovi_rpudec"
+ hevc_mediacodec_encoder_deps="mediacodec"
+ hevc_mediacodec_encoder_select="extract_extradata_bsf hevc_metadata"
+ hevc_mf_encoder_deps="mediafoundation"
+--- /dev/null
++++ b/libavcodec/quest_dovi_mediacodec.h
+@@ -0,0 +1,127 @@
++/* Profile 5 only: retain small RPU metadata alongside hardware decoding.
++ * Match by presentation timestamp, never packet order (HEVC B frames reorder).
++ * No pixel decode, CPU image readback or changes to non-Profile-5 packets. */
++#include "dovi_rpu.h"
++#include "h2645_parse.h"
++
++#define QUEST_DOVI_QUEUE_SIZE 128
++typedef struct QuestDoviFrame {
++    int64_t pts;
++    AVBufferRef *metadata;
++} QuestDoviFrame;
++typedef struct QuestDoviContext {
++    int enabled;
++    DOVIContext parser;
++    H2645Packet packet;
++    QuestDoviFrame frames[QUEST_DOVI_QUEUE_SIZE];
++} QuestDoviContext;
++
++static void quest_dovi_flush(QuestDoviContext *s)
++{
++    for (int n = 0; n < QUEST_DOVI_QUEUE_SIZE; n++)
++        av_buffer_unref(&s->frames[n].metadata);
++    ff_dovi_ctx_flush(&s->parser);
++}
++
++static void quest_dovi_close(QuestDoviContext *s)
++{
++    quest_dovi_flush(s);
++    ff_dovi_ctx_unref(&s->parser);
++    ff_h2645_packet_uninit(&s->packet);
++}
++
++static void quest_dovi_init(QuestDoviContext *s, AVCodecContext *avctx)
++{
++    if (avctx->codec_id != AV_CODEC_ID_HEVC)
++        return;
++    const AVPacketSideData *sd = av_packet_side_data_get(avctx->coded_side_data,
++        avctx->nb_coded_side_data, AV_PKT_DATA_DOVI_CONF);
++    if (!sd || sd->size < sizeof(AVDOVIDecoderConfigurationRecord))
++        return;
++    const AVDOVIDecoderConfigurationRecord *cfg = (const void *)sd->data;
++    if (cfg->dv_profile != 5 || !cfg->rpu_present_flag || cfg->el_present_flag)
++        return;
++    s->enabled = 1;
++    s->parser.logctx = avctx;
++    s->parser.cfg = *cfg;
++    av_log(avctx, AV_LOG_INFO, "Thru3D Profile 5 RPU enabled; MediaCodec pixels retained\n");
++}
++
++static int quest_dovi_packet(QuestDoviContext *s, AVCodecContext *avctx,
++                             const AVPacket *pkt)
++{
++    if (!s->enabled)
++        return 0;
++    if (pkt->pts == AV_NOPTS_VALUE)
++        return AVERROR_INVALIDDATA;
++    int ret = ff_h2645_packet_split(&s->packet, pkt->data, pkt->size, avctx, 0,
++                                   AV_CODEC_ID_HEVC, H2645_FLAG_SMALL_PADDING);
++    if (ret < 0)
++        return ret;
++    int has_rpu = 0, has_vcl = 0;
++    for (int n = 0; n < s->packet.nb_nals; n++) {
++        const H2645NAL *nal = &s->packet.nals[n];
++        has_vcl |= nal->type < 32;
++        if (nal->type != 62)
++            continue;
++        if (has_rpu++ || nal->size <= 2)
++            return AVERROR_INVALIDDATA;
++        ret = ff_dovi_rpu_parse(&s->parser, nal->data + 2, nal->size - 2,
++                               avctx->err_recognition);
++        if (ret < 0)
++            return ret;
++    }
++    if (!has_vcl)
++        return 0;
++    if (!has_rpu) {
++        av_log(avctx, AV_LOG_ERROR, "Profile 5 frame has no RPU\n");
++        return AVERROR_INVALIDDATA;
++    }
++    AVDOVIMetadata *metadata = NULL;
++    ret = ff_dovi_get_metadata(&s->parser, &metadata);
++    if (ret <= 0)
++        return ret < 0 ? ret : AVERROR_INVALIDDATA;
++    AVBufferRef *buffer = av_buffer_create((uint8_t *)metadata, ret,
++                                         av_buffer_default_free, NULL, 0);
++    if (!buffer) {
++        av_free(metadata);
++        return AVERROR(ENOMEM);
++    }
++    for (int n = 0; n < QUEST_DOVI_QUEUE_SIZE; n++) {
++        if (s->frames[n].metadata)
++            continue;
++        s->frames[n] = (QuestDoviFrame){.pts = pkt->pts, .metadata = buffer};
++        return 0;
++    }
++    av_buffer_unref(&buffer);
++    av_log(avctx, AV_LOG_ERROR, "Profile 5 RPU queue overflow\n");
++    return AVERROR_INVALIDDATA;
++}
++
++static int quest_dovi_frame(QuestDoviContext *s, AVCodecContext *avctx,
++                            AVFrame *frame, int ret)
++{
++    if (!s->enabled || ret < 0)
++        return ret;
++    for (int n = 0; n < QUEST_DOVI_QUEUE_SIZE; n++) {
++        QuestDoviFrame *f = &s->frames[n];
++        if (!f->metadata || f->pts != frame->pts)
++            continue;
++        AVBufferRef *buffer = f->metadata;
++        f->metadata = NULL;
++        av_frame_remove_side_data(frame, AV_FRAME_DATA_DOVI_METADATA);
++        if (!av_frame_new_side_data_from_buf(frame, AV_FRAME_DATA_DOVI_METADATA, buffer)) {
++            av_buffer_unref(&buffer);
++            return AVERROR(ENOMEM);
++        }
++        frame->color_range = AVCOL_RANGE_JPEG;
++        frame->color_primaries = AVCOL_PRI_BT2020;
++        frame->color_trc = AVCOL_TRC_SMPTE2084;
++        frame->colorspace = AVCOL_SPC_IPT_C2;
++        return 0;
++    }
++    av_log(avctx, AV_LOG_ERROR, "Profile 5 output has no matching RPU for PTS %"PRId64"\n",
++           frame->pts);
++    av_frame_unref(frame);
++    return AVERROR_INVALIDDATA;
++}

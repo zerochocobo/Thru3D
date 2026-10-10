@@ -1390,7 +1390,7 @@ func _draw() -> void:
 func _draw_crumbs(crumbs: Array) -> void:
 	var x := -0.455
 	# Leave room for account actions; the up button still exposes every parent.
-	var first := maxi(0, crumbs.size() - (2 if section in [Section.CLOUD, Section.LOCAL] or file_actions.folder() else 4))
+	var first := maxi(0, crumbs.size() - (2 if section in [Section.CLOUD, Section.LOCAL] or file_actions.sortable() else 4))
 	for i in range(first, crumbs.size()):
 		var text := _fit_title(str(crumbs[i]), "", 0.24, 19)
 		var width := FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19).x * 0.0012 + 0.05

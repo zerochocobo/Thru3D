@@ -267,10 +267,10 @@ internal class LocalVideoLibrary(
             .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
             .forEach {
                 val entry = JSONObject().put("id", it.absolutePath).put("title", it.name).put("container", it.isDirectory)
+                    .put("modified", it.lastModified().takeIf { time -> time > 0 } ?: -1)
                     .put("delete_uri", Uri.fromFile(it).toString()).put("can_delete", writable() && directory.canWrite() && it.canonicalPath == it.absolutePath)
                     .put("delete_reason", "File deletion permission denied")
                 if (!it.isDirectory) entry.put("uri", Uri.fromFile(it).toString()).put("size", it.length()).put("kind", MediaKinds.kind(it.name))
-                    .put("modified", it.lastModified().takeIf { time -> time > 0 } ?: -1)
                     .put("can_delete", writable() && directory.canWrite() && MediaDeletePolicy.regular(it) && it.canonicalPath == it.absolutePath)
                     .put("delete_reason", "File deletion permission denied")
                 result.put(entry)

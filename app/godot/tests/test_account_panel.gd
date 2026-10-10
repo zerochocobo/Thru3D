@@ -124,7 +124,7 @@ func _run() -> void:
 	panel.action(Accounts.BASE)
 	check(menu._about_page == 3 and menu.rows.size() >= 10, "reader back returns to global license list")
 	panel.open("server")
-	check(menu.rows.size() == 5, "server chooser includes discovery and four types")
+	check(menu.rows.size() == 6, "server chooser includes discovery and five types")
 	panel.choose(menu.rows[1]); check(panel.fields.has("base") and panel.fields.has("password"), "server editor includes address and transient secret")
 	panel.action(Accounts.BASE + 6); check(platform.account_calls.back()[1] == "save_server", "server test and save uses backend")
 	menu.dismiss(); check(not panel.active() and panel.session == 0, "close explicitly cancels form")

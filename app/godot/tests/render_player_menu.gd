@@ -29,11 +29,13 @@ func _run() -> void:
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(viewport)
 	var camera := Camera3D.new()
-	camera.fov = 48
+	camera.fov = 60
 	viewport.add_child(camera)
 	var menu := Menu.new()
 	menu.state_provider = func(): return state
 	camera.add_child(menu)
+	menu.lift_panels = true
+	menu.position.y = -0.45
 	menu.toggle()
 	var snapshots: Dictionary = {}
 	var overflow_pixels: Dictionary = {}
@@ -77,7 +79,7 @@ func _run() -> void:
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("settings-flat.png"))
-	for detail in ["screen_distance", "subtitle_distance", "color_grade"]:
+	for detail in ["screen", "color_grade"]:
 		state.geometry = 1 if detail == "subtitle_distance" else 0
 		menu._adjustment = detail
 		for page in (3 if detail == "color_grade" else 1):
@@ -177,11 +179,17 @@ func _run() -> void:
 		failures.append("Sound icon raises the volume slider")
 	menu._volume_open = false
 	# Match Main's below-eye transport pose; the enlarged subtitle popup extends above the bar.
-	menu.transform = Transform3D(Basis(Vector3.RIGHT, -atan2(0.45, 1.4)), Vector3(0, -0.45, -1.4))
+	menu.transform = Transform3D(Basis.IDENTITY, Vector3(0, -0.45, -1.4))
 	camera.fov = 60
 	menu._activate(110)
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
+	var popup: MeshInstance3D
+	for item in menu._decorations:
+		if item is MeshInstance3D and item.mesh is QuadMesh and is_equal_approx(item.mesh.size.x, 1.10): popup = item
+	if popup:
+		var upper := camera.unproject_position(popup.to_global(Vector3(0, popup.mesh.size.y / 2, 0)))
+		if upper.y < 10: failures.append("Upright subtitle popup is clipped at the top")
 	viewport.get_texture().get_image().save_png(output.path_join("subtitles-selected.png"))
 	state.subtitle_direction = 1
 	menu.refresh()
@@ -191,8 +199,8 @@ func _run() -> void:
 	state.subtitle_direction = 0
 	menu.refresh()
 	if menu._subtitle_ids.values() != [0, 1, 3, 8]: failures.append("Subtitle picker must show Off and real IDs")
-	if menu.choices.sliders.size() != 2:
-		failures.append("VR subtitle popup must show two sliders")
+	if menu.choices.sliders.size() != 3:
+		failures.append("VR subtitle popup must show three sliders")
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("subtitles-distance-popup.png"))
@@ -218,6 +226,52 @@ func _run() -> void:
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("settings-simplified.png"))
+	menu._activate(11)
+	state.geometry = 1
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("screen-vr.png"))
+	state.geometry = 0
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("screen-flat.png"))
+	menu._activate(10)
+	menu._activate(110)
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("subtitles-flat.png"))
+	state.subtitle_options.append({"id": 14, "codec": "hdmv_pgs_subtitle", "title": "Chinese PGS"})
+	state.subtitle_track = 14
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("subtitles-pgs.png"))
+	if not menu.choices.sliders.is_empty(): failures.append("PGS must hide text adjustment controls")
+	# Default and changed values must retain the row geometry while reset visibility changes.
+	for sample in [{"name": "screen-default", "geometry": 0, "scale": 100, "rotation": 0, "speed": 1, "tab": 11},
+		{"name": "screen-changed", "geometry": 0, "scale": 300, "rotation": 45, "speed": 1, "tab": 11},
+		{"name": "screen-vr-changed", "geometry": 1, "scale": 300, "rotation": -90, "speed": 1, "tab": 11},
+		{"name": "playback-default", "geometry": 0, "scale": 100, "rotation": 0, "speed": 1, "tab": Menu.PLAYBACK_SETTINGS},
+		{"name": "playback-changed", "geometry": 0, "scale": 100, "rotation": 0, "speed": 2, "tab": Menu.PLAYBACK_SETTINGS}]:
+		state.geometry = sample.geometry
+		state["screen_scale"] = sample.scale
+		state["screen_rotation"] = sample.rotation
+		state["playback_speed"] = sample.speed
+		menu._activate(sample.tab)
+		menu.refresh()
+		for button in menu._buttons:
+			if not button.has("reset_key"): continue
+			var expected: bool = sample.rotation != 0 if button.target == Menu.ROTATION_RESET else sample.speed != 1
+			if button.node.visible != expected or button.enabled != expected: failures.append("Reset visibility mismatch")
+			if button.node.visible:
+				var label: Label3D = button.node.get_child(0)
+				if menu.FONT.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.font_size).x * label.pixel_size > button.rect.size.x - 0.01:
+					failures.append("Inline reset text overflow")
+		await RenderingServer.frame_post_draw
+		await RenderingServer.frame_post_draw
+		viewport.get_texture().get_image().save_png(output.path_join(sample.name + ".png"))
 	FileAccess.open(output.path_join("verification.json"), FileAccess.WRITE).store_string(JSON.stringify({
 		"state": "passed" if failures.is_empty() else "failed", "snapshots": snapshots,
 		"overflow_white_pixels": overflow_pixels, "failures": failures,

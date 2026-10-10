@@ -20,6 +20,8 @@ def sha(path):
 
 def inputs():
     files = ['third_party/mpv/source-lock.json', 'native/mpv/patches/source-frame-manifest.json',
+             'native/mpv/patches/pgs-bitmap-manifest.json',
+             'native/mpv/patches/dovi-rpu-manifest.json',
              'tools/environment/mpv-linux/host-tools.lock.txt']
     result = {name: sha(ROOT/name) for name in files}
     for directory in ['scripts', 'include']:

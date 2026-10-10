@@ -47,6 +47,9 @@ def main():
     if not re.search(r'\bT\s+mpv_quest_source_frame_api_version(?:@@?[^\s]+)?\s*$', exports, re.M):
         raise ValueError('Source-frame extension handshake is absent from libmpv')
     destination_base = DEST.parent
+    for symbol in ['mpv_quest_pgs_api_version', 'mpv_quest_get_pgs']:
+        if not re.search(r'\bT\s+' + symbol + r'(?:@@?[^\s]+)?\s*$', exports, re.M):
+            raise ValueError('PGS extension export missing: ' + symbol)
     destination_base.mkdir(parents=True, exist_ok=True)
     records = []
     system_stubs = TOOLCHAIN.parent/'sysroot/usr/lib/aarch64-linux-android/23'
@@ -82,7 +85,10 @@ def main():
         'mpv_revision': patch_manifest['base_mpv_revision'],
         'patch_sha256': patch_manifest['patch_sha256'],
         'private_header_sha256': patch_manifest['private_header_sha256'],
-        'api_version': 1, 'ndk': '30.0.16248370', 'android_api': 23,
+        'api_version': patch_manifest['api_version'], 'ndk': '30.0.16248370', 'android_api': 23,
+        'pgs_bitmap_patch_sha256': sha(ROOT/'native/mpv/patches/0003-mpv-pgs-bitmap.patch'),
+        'pgs_bitmap_header_sha256': sha(ROOT/'native/mpv/include/mpv/quest_subtitle.h'),
+        'dovi_rpu_patch_sha256': sha(ROOT/'native/mpv/patches/0002-ffmpeg-profile5-rpu.patch'),
         'architecture': 'arm64-v8a', 'elf_page_alignment': 16384,
         'build_command': 'buildall.sh --arch arm64 mpv',
         'build_scripts_sha256': scripts, 'packaged_libraries': LIBS,

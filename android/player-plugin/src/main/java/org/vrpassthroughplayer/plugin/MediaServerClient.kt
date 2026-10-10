@@ -8,7 +8,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 /** Errors crossing into Godot are codes, never server bodies or credential-bearing URLs. */
-internal class MediaServerFailure(val code: String, val httpStatus: Int = 0) : Exception(code)
+internal class MediaServerFailure(val code: String, val httpStatus: Int = 0, val transportError: String = "") : Exception(code)
 internal fun mediaRequire(value: Boolean, code: String = "Invalid server response") {
     if (!value) throw MediaServerFailure(code)
 }
@@ -49,7 +49,8 @@ internal object MediaLibraryUri {
 }
 
 /** A request scope; close disconnects live calls as well as preventing late requests. */
-internal class MediaServerHttp(private val account: MediaServerAccount) : Closeable {
+internal class MediaServerHttp(private val account: MediaServerAccount,
+    private val connectTimeoutMs: Int = 10000, private val readTimeoutMs: Int = 15000) : Closeable {
     private val live = ConcurrentHashMap.newKeySet<HttpURLConnection>()
     @Volatile private var closed = false
     fun open(uri: URI, range: String? = null, json: JSONObject? = null,
@@ -65,9 +66,18 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
                 live.add(c)
             }
             try {
-                c.connectTimeout = 10000; c.readTimeout = 15000; c.instanceFollowRedirects = false; c.useCaches = false
+                c.connectTimeout = connectTimeoutMs; c.readTimeout = readTimeoutMs; c.instanceFollowRedirects = false; c.useCaches = false
                 c.setRequestProperty("Accept-Encoding", "identity")
                 when (account.provider) {
+                    "plex" -> {
+                        c.setRequestProperty("Accept", "application/json")
+                        c.setRequestProperty("X-Plex-Product", "Thru3D")
+                        c.setRequestProperty("X-Plex-Version", "0.5.0")
+                        c.setRequestProperty("X-Plex-Platform", "Android")
+                        c.setRequestProperty("X-Plex-Device", "VR headset")
+                        c.setRequestProperty("X-Plex-Client-Identifier", account.id)
+                        if (account.key.isNotEmpty()) c.setRequestProperty("X-Plex-Token", account.key)
+                    }
                     "stash" -> if (account.key.isNotEmpty()) c.setRequestProperty("ApiKey", account.key)
                     "emby", "jellyfin" -> {
                         val scheme = if (account.provider == "emby") "Emby" else "MediaBrowser"
@@ -103,7 +113,7 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
                     if (status !in 200..299) throw MediaServerFailure("Server request failed", status)
                     return c
                 }
-            } catch (e: Exception) { release(c); throw if (e is MediaServerFailure) e else MediaServerFailure("Server unavailable") }
+            } catch (e: Exception) { release(c); throw if (e is MediaServerFailure) e else MediaServerFailure("Server unavailable", transportError = e.javaClass.simpleName) }
         }
         throw MediaServerFailure("Too many redirects")
     }
@@ -129,7 +139,7 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
         } finally { release(c) }
     }
     fun release(c: HttpURLConnection) { live.remove(c); c.disconnect() }
-    override fun close() { synchronized(this) { closed = true }; live.toList().forEach(::release) }
+    override fun close() { synchronized(this) { closed = true }; java.util.ArrayList(live).forEach(::release) }
 }
 
 internal interface MediaLibraryClient {
@@ -151,6 +161,7 @@ internal fun mediaClient(account: MediaServerAccount, http: MediaServerHttp): Me
     "stash" -> StashClient(account, http)
     "emby", "jellyfin" -> EmbyClient(account, http)
     "xbvr" -> XbvrClient(account, http)
+    "plex" -> PlexClient(account, http)
     else -> throw MediaServerFailure("Unsupported server")
 }
 internal class StashClient(private val account: MediaServerAccount, private val http: MediaServerHttp) : MediaLibraryClient {

@@ -48,7 +48,7 @@ internal class HttpRangeStreamSource(
     override fun close() {
         closed = true
         http.close() // unblock readers before acquiring their state
-        readers.toList().forEach { it.close() }
+        java.util.ArrayList(readers).forEach { it.close() }
     }
     private inner class RemoteReader : StreamSource.Reader {
         @Volatile private var done = false

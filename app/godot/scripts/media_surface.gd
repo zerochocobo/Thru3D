@@ -29,6 +29,7 @@ const SCALE_LIMITS := Vector2(0.4, 3.0)
 const CURVES := [0.0, 0.35, 0.7, 1.0]
 var screen_distance := SCREEN_DISTANCE
 var screen_scale := 1.0
+var screen_rotation := 0.0
 var screen_curve := 0.0
 var _screen_base := Vector2(1.9, 1.07)
 var _curved: ArrayMesh
@@ -72,7 +73,7 @@ func _apply_geometry() -> void:
 		if geometry != Geometry.Geometry.FLAT:
 			reset_view()
 	if geometry == Geometry.Geometry.FLAT:
-		panel.transform = flat_pose
+		panel.transform = flat_pose * Transform3D(Basis(Vector3.FORWARD, deg_to_rad(screen_rotation)), Vector3.ZERO)
 		var dimensions := _source_size()
 		var aspect := dimensions.x / maxf(1.0, dimensions.y) \
 			/ (2.0 if stereo_sbs and not top_bottom else 1.0) * (2.0 if stereo_sbs and top_bottom else 1.0)
@@ -108,7 +109,7 @@ func _screen_dimensions(aspect: float) -> Vector2:
 ## Immersive projections are centred on the eyes every frame. Runs on every presented video frame
 ## too, so it must never put the sphere anywhere else (that alternated with _process and shook the view).
 func _center_on_view() -> void:
-	panel.global_basis = _view_basis * Basis(Vector3.UP, view_yaw) * Basis(Vector3.RIGHT, view_pitch)
+	panel.global_basis = _view_basis * Basis(Vector3.UP, view_yaw) * Basis(Vector3.RIGHT, view_pitch) * Basis(Vector3.FORWARD, deg_to_rad(screen_rotation))
 	if view_camera and view_camera.is_inside_tree():
 		panel.global_position = view_camera.global_position
 	else:
@@ -204,6 +205,14 @@ func screen_point(origin: Vector3, direction: Vector3) -> Variant:
 	if absf(delta.z) < 0.00001 or (-start.z / delta.z) <= 0.0:
 		return null
 	return start + delta * (-start.z / delta.z)
+
+func set_screen_rotation(value: float) -> void:
+	if not is_finite(value): return
+	screen_rotation = clampf(value, -90.0, 90.0)
+	_apply_geometry()
+
+func subtitle_transform() -> Transform3D:
+	return Transform3D(panel.global_basis * Basis(Vector3.FORWARD, -deg_to_rad(screen_rotation)), panel.global_position)
 
 func set_screen_scale(value: float) -> void:
 	screen_scale = clampf(value, SCALE_LIMITS.x, SCALE_LIMITS.y)
