@@ -5,7 +5,10 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
-internal data class MediaStreamLink(val url: URI, val identity: String)
+internal data class MediaSubtitleLink(val url: URI, val title: String, val extension: String = "srt")
+internal data class MediaAudioLink(val url: URI, val identity: String, val title: String)
+internal data class MediaStreamLink(val url: URI, val identity: String,
+    val subtitles: List<MediaSubtitleLink> = emptyList(), val audio: List<MediaAudioLink> = emptyList(), val basename: String = "")
 
 /** Authenticated, seekable original-file streaming. Only the local token is given to MPV. */
 internal class HttpRangeStreamSource(
@@ -37,6 +40,7 @@ internal class HttpRangeStreamSource(
         }
         return link
     }
+    fun original(): MediaStreamLink = current()
     override fun open(): StreamSource.Reader = synchronized(this) {
         mediaRequire(!closed, "Request cancelled")
         RemoteReader().also { readers.add(it) }

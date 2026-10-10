@@ -12,6 +12,7 @@ import java.net.MulticastSocket
 import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.URI
 import javax.xml.parsers.DocumentBuilderFactory
 
 /** Minimal UPnP AV client: SSDP discovery of MediaServers and ContentDirectory Browse.
@@ -19,11 +20,40 @@ import javax.xml.parsers.DocumentBuilderFactory
 internal object DlnaClient {
     /** Diagnostics sink (android.util.Log on device; silent in JVM tests). */
     @Volatile var log: (String) -> Unit = {}
-    data class Server(val id: String, val name: String, val location: String, val controlUrl: String) {
-        fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("location", location).put("control_url", controlUrl)
+    data class Server(val id: String, val name: String, val location: String, val controlUrl: String,
+        val serviceType: String = CONTENT_DIRECTORY) {
+        fun json(): JSONObject = JSONObject().put("id", id).put("name", name).put("location", location)
+            .put("control_url", controlUrl).put("service_type", serviceType)
     }
 
     private const val CONTENT_DIRECTORY = "urn:schemas-upnp-org:service:ContentDirectory:1"
+    private const val SEC = "http://www.sec.co.kr/"
+    private const val PV = "http://www.pv.com/pvns/"
+
+    fun address(host: String, port: String, scheme: String = "http"): String {
+        val number = port.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: error("Invalid DLNA port")
+        val name = host.trim().removeSurrounding("[", "]")
+        if (name.isBlank() || name.any { it.isWhitespace() || it in "/?#@" } || "://" in name) error("Invalid DLNA address")
+        val authority = if (':' in name) "[$name]" else name
+        return httpUri("$scheme://$authority:$number")?.toString() ?: error("Invalid DLNA address")
+    }
+
+    /** A host:port probes common description paths; a full URL is used exactly as supplied. */
+    fun descriptionLocations(address: String): List<String> {
+        val input = address.trim().let { if ("://" in it) it else "http://$it" }
+        val uri = httpUri(input) ?: error("Invalid DLNA address")
+        if (uri.rawPath.orEmpty().trim('/').isNotEmpty() || uri.rawQuery != null) return listOf(uri.toString())
+        val base = uri.toString().trimEnd('/') + "/"
+        return listOf("description.xml", "rootDesc.xml", "DeviceDescription.xml", "", "upnp/desc.xml")
+            .map { URI(base).resolve(it).toString() }
+    }
+
+    fun connect(address: String): Server {
+        for (location in descriptionLocations(address)) {
+            runCatching { describe(location, get(location)) }.getOrNull()?.let { return it }
+        }
+        error("DLNA server unavailable; check the address and port")
+    }
 
     /** Up, non-loopback, multicast-capable interfaces with an IPv4 address (Wi-Fi, Ethernet...). */
     fun lanInterfaces(): List<NetworkInterface> = runCatching {
@@ -73,40 +103,43 @@ internal object DlnaClient {
     /** Device description -> server with an absolute ContentDirectory control URL, or null. */
     fun describe(location: String, xml: String): Server? {
         val doc = parse(xml)
-        val base = doc.getElementsByTagName("URLBase").item(0)?.textContent?.trim()?.takeIf { it.isNotEmpty() } ?: location
-        val name = doc.getElementsByTagName("friendlyName").item(0)?.textContent?.trim() ?: location
-        val udn = doc.getElementsByTagName("UDN").item(0)?.textContent?.trim() ?: location
-        val services = doc.getElementsByTagName("service")
+        val base = doc.getElementsByTagNameNS("*", "URLBase").item(0)?.textContent?.trim()?.takeIf { it.isNotEmpty() } ?: location
+        val name = doc.getElementsByTagNameNS("*", "friendlyName").item(0)?.textContent?.trim()?.takeIf { it.isNotEmpty() } ?: location
+        val udn = doc.getElementsByTagNameNS("*", "UDN").item(0)?.textContent?.trim()?.takeIf { it.isNotEmpty() } ?: location
+        val services = doc.getElementsByTagNameNS("*", "service")
         for (i in 0 until services.length) {
             val service = services.item(i) as Element
             val type = child(service, "serviceType") ?: continue
-            if (!type.startsWith("urn:schemas-upnp-org:service:ContentDirectory:")) continue
+            if (!type.matches(Regex("urn:schemas-upnp-org:service:ContentDirectory:[1-9][0-9]*"))) continue
             val control = child(service, "controlURL") ?: continue
-            return Server(udn, name, location, URL(URL(base), control).toString())
+            val endpoint = httpUri(control, httpUri(base, location)?.toString() ?: location) ?: continue
+            return Server(udn, name, location, endpoint.toString(), type)
         }
         return null
     }
 
     /** One level of a container: containers first, then playable video items. */
-    fun browse(server: Server, objectId: String): JSONArray {
+    fun browse(server: Server, objectId: String, metadata: Boolean = false): JSONArray {
         val body = """<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-<s:Body><u:Browse xmlns:u="$CONTENT_DIRECTORY"><ObjectID>${escape(objectId)}</ObjectID>
-<BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex>
+<s:Body><u:Browse xmlns:u="${server.serviceType}"><ObjectID>${escape(objectId)}</ObjectID>
+<BrowseFlag>${if (metadata) "BrowseMetadata" else "BrowseDirectChildren"}</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex>
 <RequestedCount>1000</RequestedCount><SortCriteria></SortCriteria></u:Browse></s:Body></s:Envelope>"""
         val connection = URL(server.controlUrl).openConnection() as HttpURLConnection
         connection.connectTimeout = 5000; connection.readTimeout = 15000
         connection.requestMethod = "POST"; connection.doOutput = true
         connection.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
-        connection.setRequestProperty("SOAPACTION", "\"$CONTENT_DIRECTORY#Browse\"")
-        connection.outputStream.use { it.write(body.toByteArray()) }
-        val response = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-        val result = parse(response).getElementsByTagName("Result").item(0)?.textContent ?: return JSONArray()
-        return didl(result)
+        connection.setRequestProperty("SOAPACTION", "\"${server.serviceType}#Browse\"")
+        try {
+            connection.outputStream.use { it.write(body.toByteArray()) }
+            val response = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+            val result = parse(response).getElementsByTagNameNS("*", "Result").item(0)?.textContent ?: return JSONArray()
+            return didl(result, server.location)
+        } finally { connection.disconnect() }
     }
 
     /** DIDL-Lite -> entries {id, title, container, uri?, size?, duration_ms?, width?, height?}. */
-    fun didl(xml: String): JSONArray {
+    fun didl(xml: String, base: String = ""): JSONArray {
         val doc = parse(xml)
         val out = JSONArray()
         val containers = doc.getElementsByTagNameNS("*", "container")
@@ -135,7 +168,8 @@ internal object DlnaClient {
             }
             val res = chosen ?: continue
             val entry = JSONObject().put("id", item.getAttribute("id")).put("title", title(item)).put("container", false)
-                .put("uri", res.textContent.trim()).put("kind", if (imageItem) "image" else "video")
+                .put("uri", httpUri(res.textContent.trim(), base)?.toString() ?: res.textContent.trim()).put("kind", if (imageItem) "image" else "video")
+            if (!imageItem) entry.put("subtitles", subtitles(item, base))
             res.getAttribute("size").toLongOrNull()?.let { entry.put("size", it) }
             parseDuration(res.getAttribute("duration"))?.let { entry.put("duration_ms", it) }
             res.getAttribute("resolution").split('x').mapNotNull { it.toIntOrNull() }.takeIf { it.size == 2 }?.let {
@@ -156,6 +190,79 @@ internal object DlnaClient {
         return ((h * 3600 + m * 60) * 1000 + s * 1000).toLong()
     }
 
+    /** Resource links carry languages; SEC/PV usually duplicate the preferred resource. */
+    private fun subtitles(item: Element, base: String): JSONArray {
+        val found = LinkedHashMap<String, JSONObject>()
+        fun add(value: String, type: String = "", language: String = "") {
+            val uri = httpUri(value.trim(), base) ?: return
+            val extension = subtitleType(type).ifEmpty { subtitleType(uri.path.substringAfterLast('.', "")) }
+            if (extension.isEmpty()) return
+            val key = subtitleIdentity(uri)
+            if (key in found || found.size >= 8) return
+            val filename = uri.path.substringAfterLast('/').take(150)
+            found[key] = JSONObject().put("url", uri.toString()).put("extension", extension)
+                .put("title", if (language.isNotBlank()) "${language.take(40)} · ${extension.uppercase()}" else filename.ifBlank { extension.uppercase() })
+        }
+        val resources = item.getElementsByTagNameNS("*", "res")
+        for (i in 0 until resources.length) {
+            val res = resources.item(i) as Element
+            val mime = res.getAttribute("protocolInfo").split(':').getOrNull(2).orEmpty()
+            if (subtitleType(mime).isNotEmpty() || mime in listOf("text/plain", "application/octet-stream"))
+                add(res.textContent, mime, res.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang"))
+        }
+        for (tag in listOf("CaptionInfoEx", "CaptionInfo")) {
+            val captions = item.getElementsByTagNameNS(SEC, tag)
+            for (i in 0 until captions.length) {
+                val caption = captions.item(i) as Element
+                add(caption.textContent, caption.getAttributeNS(SEC, "type").ifEmpty { caption.getAttribute("type") })
+            }
+        }
+        for (i in 0 until resources.length) {
+            val res = resources.item(i) as Element
+            add(res.getAttributeNS(PV, "subtitleFileUri"), res.getAttributeNS(PV, "subtitleFileType"))
+        }
+        return JSONArray(found.values.toList())
+    }
+
+    fun subtitleType(type: String): String = when (type.lowercase().substringBefore(';').trim()) {
+        "srt", "application/x-subrip", "application/srt", "text/srt", "text/x-srt" -> "srt"
+        "ass", "application/x-ass", "text/x-ass" -> "ass"
+        "ssa", "application/x-ssa", "text/x-ssa" -> "ssa"
+        "vtt", "text/vtt" -> "vtt"
+        "smi", "sami", "application/x-sami", "text/smi" -> "smi"
+        else -> ""
+    }
+
+    private fun subtitleIdentity(uri: URI): String {
+        // PTMediaServer's text/srt alternative differs only by this format hint.
+        val query = uri.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() && !it.equals("mime=text/srt", true) }
+        return uri.toString().substringBefore('?') + if (query.isEmpty()) "" else "?" + query.joinToString("&")
+    }
+
+    fun httpUri(value: String, base: String = ""): URI? = runCatching {
+        require(value.isNotBlank())
+        val uri = if (base.isEmpty()) URI(value) else URI(base).resolve(value)
+        require(uri.scheme?.lowercase() in listOf("http", "https") && !uri.host.isNullOrBlank() &&
+            uri.rawUserInfo == null && uri.rawFragment == null && uri.port in -1..65535 && uri.port != 0)
+        uri
+    }.getOrNull()
+
+    /** Header-only servers can advertise the default track without DIDL subtitle resources. */
+    fun captionHeader(video: String): JSONArray {
+        val url = httpUri(video) ?: return JSONArray()
+        val connection = url.toURL().openConnection() as HttpURLConnection
+        connection.connectTimeout = 3000; connection.readTimeout = 5000
+        connection.requestMethod = "HEAD"
+        connection.setRequestProperty("getCaptionInfo.sec", "1")
+        return try {
+            if (connection.responseCode !in 200..299) return JSONArray()
+            val caption = httpUri(connection.getHeaderField("CaptionInfo.sec").orEmpty(), connection.url.toString()) ?: return JSONArray()
+            val extension = subtitleType(caption.path.substringAfterLast('.', ""))
+            if (extension.isEmpty()) JSONArray() else JSONArray().put(JSONObject().put("url", caption.toString())
+                .put("extension", extension).put("title", caption.path.substringAfterLast('/')))
+        } finally { connection.disconnect() }
+    }
+
     fun isVideoName(name: String) = name.substringBefore('?').substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS
     val VIDEO_EXTENSIONS = setOf("mp4", "mkv", "mov", "m4v", "webm", "ts", "m2ts", "avi", "wmv", "flv", "mpg", "mpeg")
 
@@ -170,7 +277,7 @@ internal object DlnaClient {
 
     private fun title(element: Element) = element.getElementsByTagNameNS("*", "title").item(0)?.textContent?.trim() ?: ""
     private fun child(element: Element, name: String): String? {
-        val nodes = element.getElementsByTagName(name)
+        val nodes = element.getElementsByTagNameNS("*", name)
         return if (nodes.length == 0) null else nodes.item(0).textContent.trim()
     }
     private fun escape(text: String) = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -185,6 +292,7 @@ internal object DlnaClient {
     private fun get(url: String): String {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = 3000; connection.readTimeout = 5000
-        return connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+        return try { connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) } }
+        finally { connection.disconnect() }
     }
 }

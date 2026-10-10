@@ -4,6 +4,7 @@ import java.net.URI
 
 internal object CloudWebNavigation {
     fun allowed(value: String, provider: String, mainFrame: Boolean): Boolean {
+        if (OpenListAuth.supported(provider)) return OpenListAuth.allowed(value, provider, mainFrame)
         // Login bridge frames are initialized with about:blank before navigation.
         if (!mainFrame && value == "about:blank") return true
         val uri = runCatching { URI(value) }.getOrNull() ?: return false

@@ -37,7 +37,7 @@ func _run() -> void:
 		events.append([key, value]); state[key] = value
 		if key == "language": I18n.use(str(value)))
 	root.add_child(menu); menu.toggle(); menu.set_process(false)
-	check(menu.rows.size() == 3 and menu.rows[0].key == "language" and menu.rows[1].key == "history", "One row per setting; language is not five separate rows")
+	check(menu.rows.filter(func(row): return row.get("key", "") == "language").size() == 1 and menu.rows.any(func(row): return row.get("key", "") == "history"), "One row per setting; language is not five separate rows")
 	var open_id := target(menu, "language", null, "open")
 	var point := origin(menu, open_id)
 	menu.press_pointer("left_hand", point, -menu.global_basis.z, true)

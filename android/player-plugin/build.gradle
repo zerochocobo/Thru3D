@@ -54,6 +54,23 @@ android {
 
 tasks.named('preBuild').configure { dependsOn stagePlayerAssets }
 
+// Only SMB is used by the player. jcifs also ships deprecated HTTP NTLM wrappers
+// that copy a caller-supplied TLS verifier when reconnecting. Bundle a filtered
+// local jar so the Godot export cannot reintroduce these unused adapters.
+configurations {
+    smbUpstream { canBeConsumed = false; transitive = false }
+}
+def smbClientJar = tasks.register('smbClientJar', Jar) {
+    archiveFileName = 'jcifs-3.0.4-smb-client.jar'
+    destinationDirectory = layout.buildDirectory.dir('smb-client')
+    from({ zipTree(configurations.smbUpstream.singleFile) })
+    exclude 'org/codelibs/jcifs/smb/http/**', 'org/codelibs/jcifs/smb/https/**'
+    exclude 'org/codelibs/jcifs/smb1/http/**', 'org/codelibs/jcifs/smb1/https/**'
+    exclude 'META-INF/MANIFEST.MF'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
 def godotApi = providers.gradleProperty('godotAarPath')
 if (!godotApi.isPresent() || !file(godotApi.get()).isFile()) {
     throw new GradleException('Pass -PgodotAarPath=<Godot 4.7.2 Android template AAR>. Run tools/Build-Player.ps1 to prepare it.')
@@ -61,9 +78,14 @@ if (!godotApi.isPresent() || !file(godotApi.get()).isFile()) {
 dependencies {
     // The exported Godot APK supplies this library. Never package a second engine.
     compileOnly files(godotApi.get())
+    compileOnly files("../../app/godot/addons/quest_player/bin/cloudcore.aar")
     implementation 'androidx.media3:media3-exoplayer:1.10.1'
-    // SMB2/3 client with share enumeration (LGPL-2.1); the APK is already GPL through MPV.
-    implementation 'org.codelibs:jcifs:3.0.4'
+    // Preserve SMB2/3, NTLM authentication, signing and encryption (LGPL-2.1).
+    smbUpstream 'org.codelibs:jcifs:3.0.4'
+    implementation files(smbClientJar)
+    // Match jcifs 3.0.4's upstream runtime dependencies; exported by Godot too.
+    implementation 'org.slf4j:slf4j-api:1.7.36'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
     testImplementation 'junit:junit:4.13.2'
     // JVM tests exercise org.json; android.jar only provides stubs.
     testImplementation 'org.json:json:20240303'

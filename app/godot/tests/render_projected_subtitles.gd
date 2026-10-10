@@ -4,8 +4,8 @@ var failures: Array[String] = []
 func centroid(image: Image) -> Vector2:
 	var mass := 0.0
 	var total := Vector2.ZERO
-	for y in range(380, 565):
-		for x in range(380, 930):
+	for y in range(240, 565):
+		for x in range(150, 1100):
 			var c := image.get_pixel(x, y)
 			var w := maxf(0, minf(c.r, minf(c.g, c.b)) - 0.4)
 			mass += w; total += Vector2(x, y) * w
@@ -48,70 +48,72 @@ func _run():
 	video.material.set_shader_parameter("sharpness", 0)
 	var samples: Array[Dictionary] = []
 	var motion_samples: Array[Dictionary] = []
-	for geometry in [1, 2, 3]:
-		video.geometry = geometry
-		video._apply_geometry()
-		video.panel.visible = true
-		for distance in [0.5, 2.0, 20.0]:
-			video.subtitle_distance = distance
-			video._place_caption()
-			var centers: Array[Vector2] = []
-			for index in 2:
-				eye.position.x = (index - 0.5) * 0.063
-				video.material.set_shader_parameter("probe_eye", index)
-				video.material.set_shader_parameter("alpha_enabled", geometry == 2)
-				await process_frame
-				await RenderingServer.frame_post_draw
-				await RenderingServer.frame_post_draw
-				var pixels := viewport.get_texture().get_image()
-				centers.append(centroid(pixels))
-				if distance == 20: pixels.save_png(output.path_join("geometry%d_eye%d.png" % [geometry,index]))
-			var angle := 2.0 * atan(0.063 / (2.0 * distance))
-			# Reference source-longitude shift, plus the shared video's 50m projection surface.
-			var expected := 360.0 * (tan(angle) + 0.063 / (50.0 * cos(video.CAPTION_DROP)))
-			var actual := centers[0].x - centers[1].x
-			var expected_y := 360.0 * tan(video.CAPTION_DROP) * (1.0 - 1.0 / cos(angle))
-			var actual_y := centers[0].y - centers[1].y
-			if absf(actual - expected) > 0.9 or absf(actual_y - expected_y) > 0.4: failures.append("Geometry/parallax mismatch")
-			samples.append({"geometry":geometry,"distance_m":distance,"actual_pixels":actual,"expected_pixels":expected,"vertical_pixels":actual_y,"expected_vertical_pixels":expected_y})
-		# Keep a spectator eye fixed and vary the pose supplied to production caption placement.
-		# Following the head would move actual glyph pixels against the stationary video here.
-		video.material.set_shader_parameter("probe_eye", 0)
-		eye.position.x = -0.0315
-		head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
-		video._place_caption()
-		await RenderingServer.frame_post_draw
-		await RenderingServer.frame_post_draw
-		var baseline := centroid(viewport.get_texture().get_image())
-		var anchor: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
-		for pose in [Vector3(0, 60, 0), Vector3(0, -60, 0), Vector3(35, 0, 0), Vector3(-35, 0, 0), Vector3(0, 0, 40), Vector3(20, -45, -30)]:
-			head.rotation = pose * PI / 180.0
-			head.position = Vector3(0.2, 1.75, 0.1)
-			for frame in 12:
+	for direction in [0, 1]:
+		video.subtitle_direction = direction
+		for geometry in [1, 2, 3]:
+			video.geometry = geometry
+			video._apply_geometry()
+			video.panel.visible = true
+			for distance in [0.1, 0.5, 2.0, 10.0]:
+				video.subtitle_distance = distance
 				video._place_caption()
-				await process_frame
+				var centers: Array[Vector2] = []
+				for index in 2:
+					eye.position.x = (index - 0.5) * 0.063
+					video.material.set_shader_parameter("probe_eye", index)
+					video.material.set_shader_parameter("alpha_enabled", geometry == 2)
+					await process_frame
+					await RenderingServer.frame_post_draw
+					await RenderingServer.frame_post_draw
+					var pixels := viewport.get_texture().get_image()
+					centers.append(centroid(pixels))
+					if distance == 10: pixels.save_png(output.path_join("direction%d_geometry%d_eye%d.png" % [direction,geometry,index]))
+				var angle := 2.0 * atan(0.063 / (2.0 * distance))
+				# Reference source-longitude shift, plus the shared video's 50m projection surface.
+				var expected := 360.0 * (tan(angle) + 0.063 / (50.0 * cos((-video.SubtitleDepth.elevation(video.subtitle_position)))))
+				var actual := centers[0].x - centers[1].x
+				var expected_y := 360.0 * tan((-video.SubtitleDepth.elevation(video.subtitle_position))) * (1.0 - 1.0 / cos(angle))
+				var actual_y := centers[0].y - centers[1].y
+				if absf(actual - expected) > 0.9 or absf(actual_y - expected_y) > 0.4: failures.append("Geometry/parallax mismatch")
+				samples.append({"direction":direction,"geometry":geometry,"distance_m":distance,"actual_pixels":actual,"expected_pixels":expected,"vertical_pixels":actual_y,"expected_vertical_pixels":expected_y})
+			# Keep a spectator eye fixed and vary the pose supplied to production caption placement.
+			# Following the head would move actual glyph pixels against the stationary video here.
+			video.material.set_shader_parameter("probe_eye", 0)
+			eye.position.x = -0.0315
+			head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
+			video._place_caption()
 			await RenderingServer.frame_post_draw
-			var shift := centroid(viewport.get_texture().get_image()).distance_to(baseline)
-			var current: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
-			if shift > 0.15 or not current.is_equal_approx(anchor): failures.append("Head pose moves caption relative to video")
-			motion_samples.append({"geometry":geometry,"head_rotation_degrees":[pose.x,pose.y,pose.z],"glyph_shift_pixels":shift})
-		# A video adjustment must carry its captions with it; the local anchor stays unchanged.
-		video.turn_view(0.1, 0.05)
-		video.zoom_view(0.1)
-		video._place_caption()
-		var adjusted: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
-		if not adjusted.is_equal_approx(anchor): failures.append("Video adjustment changes local caption anchor")
-		video.reset_view()
-		head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
-		video._center_on_view()
+			await RenderingServer.frame_post_draw
+			var baseline := centroid(viewport.get_texture().get_image())
+			var anchor: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+			for pose in [Vector3(0, 60, 0), Vector3(0, -60, 0), Vector3(35, 0, 0), Vector3(-35, 0, 0), Vector3(0, 0, 40), Vector3(20, -45, -30)]:
+				head.rotation = pose * PI / 180.0
+				head.position = Vector3(0.2, 1.75, 0.1)
+				for frame in 12:
+					video._place_caption()
+					await process_frame
+				await RenderingServer.frame_post_draw
+				var shift := centroid(viewport.get_texture().get_image()).distance_to(baseline)
+				var current: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+				if shift > 0.15 or not current.is_equal_approx(anchor): failures.append("Head pose moves caption relative to video")
+				motion_samples.append({"direction":direction,"geometry":geometry,"head_rotation_degrees":[pose.x,pose.y,pose.z],"glyph_shift_pixels":shift})
+			# A video adjustment must carry its captions with it; the local anchor stays unchanged.
+			video.turn_view(0.1, 0.05)
+			video.zoom_view(0.1)
+			video._place_caption()
+			var adjusted: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")
+			if not adjusted.is_equal_approx(anchor): failures.append("Video adjustment changes local caption anchor")
+			video.reset_view()
+			head.transform = Transform3D(Basis(), Vector3(0, 1.6, 0))
+			video._center_on_view()
 	video.projected_subtitles.clear(video.material)
 	video.material.set_shader_parameter("alpha_enabled", true)
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	var dark := viewport.get_texture().get_image()
 	var bright := 0
-	for y in range(380,565):
-		for x in range(380,930):
+	for y in range(240,565):
+		for x in range(150,1100):
 			var c := dark.get_pixel(x,y)
 			if minf(c.r,minf(c.g,c.b))>0.8: bright+=1
 	if bright != 0: failures.append("CC Off leaves projected glyphs")

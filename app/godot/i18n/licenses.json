@@ -1,16 +1,270 @@
 [
-  {"id":"godot","name":"Godot 4.7.2","license":"MIT","assets":[]},
-  {"id":"godot-third-party","name":"Godot third-party components","license":"Bundled license notices","assets":[]},
-  {"id":"project","name":"Thru3D / MPV / FFmpeg","license":"GPL-3.0","assets":["mpv/LICENSE.GPL","mpv/LICENSE.LGPL"]},
-  {"id":"vendors","name":"Godot OpenXR Vendors 5.1.0","license":"Vendor license notices","assets":["player-licenses/vendors.txt"]},
-  {"id":"rvm","name":"RVM MobileNetV3","license":"GPL-3.0","assets":["player-licenses/rvm.txt"]},
-  {"id":"mnn","name":"MNN 3.6.1","license":"Apache-2.0","assets":["player-licenses/mnn.txt"]},
-  {"id":"ncnn","name":"ncnn 20260526","license":"BSD-3-Clause","assets":["player-licenses/ncnn.txt"]},
-  {"id":"depth","name":"Depth Anything V2 Small","license":"Apache-2.0","assets":["player-licenses/depth.txt"]},
-  {"id":"media3","name":"AndroidX Media3","license":"Apache-2.0","assets":["player-licenses/media3.txt"]},
-  {"id":"jcifs","name":"CodeLibs JCIFS 3.0.4","license":"LGPL-2.1","assets":["player-licenses/jcifs.txt"]},
-  {"id":"115","name":"p115rsacipher 0.0.1","license":"MIT","assets":["p115rsacipher/NOTICE.md","p115rsacipher/LICENSE"]},
-  {"id":"hands","name":"Godot OpenXR hand demo assets","license":"MIT","assets":["player-licenses/hands.txt"]},
-  {"id":"panorama","name":"Belfast Sunset (Pure Sky)","license":"CC0-1.0","assets":["player-licenses/panorama-notice.txt","polyhaven/CC0-1.0.txt"]},
-  {"id":"gradle","name":"Gradle wrapper 8.11.1","license":"Apache-2.0","assets":["gradle/NOTICE.txt","gradle/LICENSE.txt"]}
+  {
+    "id": "godot",
+    "name": "Godot 4.7.2",
+    "license": "MIT",
+    "assets": []
+  },
+  {
+    "id": "godot-third-party",
+    "name": "Godot third-party components",
+    "license": "Bundled license notices",
+    "assets": []
+  },
+  {
+    "id": "project",
+    "name": "Thru3D / MPV / FFmpeg",
+    "license": "GPL-3.0",
+    "assets": [
+      "mpv/LICENSE.GPL",
+      "mpv/LICENSE.LGPL"
+    ]
+  },
+  {
+    "id": "vendors",
+    "name": "Godot OpenXR Vendors 5.1.0",
+    "license": "Vendor license notices",
+    "assets": [
+      "player-licenses/vendors.txt"
+    ]
+  },
+  {
+    "id": "rvm",
+    "name": "RVM MobileNetV3",
+    "license": "GPL-3.0",
+    "assets": [
+      "player-licenses/rvm.txt"
+    ]
+  },
+  {
+    "id": "mnn",
+    "name": "MNN 3.6.1",
+    "license": "Apache-2.0",
+    "assets": [
+      "player-licenses/mnn.txt"
+    ]
+  },
+  {
+    "id": "ncnn",
+    "name": "ncnn 20260526",
+    "license": "BSD-3-Clause",
+    "assets": [
+      "player-licenses/ncnn.txt"
+    ]
+  },
+  {
+    "id": "depth",
+    "name": "Depth Anything V2 Small",
+    "license": "Apache-2.0",
+    "assets": [
+      "player-licenses/depth.txt"
+    ]
+  },
+  {
+    "id": "media3",
+    "name": "AndroidX Media3",
+    "license": "Apache-2.0",
+    "assets": [
+      "player-licenses/media3.txt"
+    ]
+  },
+  {
+    "id": "jcifs",
+    "name": "CodeLibs JCIFS 3.0.4",
+    "license": "LGPL-2.1",
+    "assets": [
+      "player-licenses/jcifs.txt"
+    ]
+  },
+  {
+    "id": "115",
+    "name": "p115rsacipher 0.0.1",
+    "license": "MIT",
+    "assets": [
+      "p115rsacipher/NOTICE.md",
+      "p115rsacipher/LICENSE"
+    ]
+  },
+  {
+    "id": "openlist",
+    "name": "OpenList 4.2.6",
+    "license": "AGPL-3.0",
+    "assets": [
+      "openlist/NOTICE.md",
+      "openlist/LICENSE",
+      "openlist/GO_LICENSE",
+      "openlist/GOMOBILE_LICENSE"
+    ]
+  },
+  {
+    "id": "hands",
+    "name": "Godot OpenXR hand demo assets",
+    "license": "MIT",
+    "assets": [
+      "player-licenses/hands.txt"
+    ]
+  },
+  {
+    "id": "panorama",
+    "name": "Belfast Sunset (Pure Sky)",
+    "license": "CC0-1.0",
+    "assets": [
+      "player-licenses/panorama-notice.txt",
+      "polyhaven/CC0-1.0.txt"
+    ]
+  },
+  {
+    "id": "gradle",
+    "name": "Gradle wrapper 8.11.1",
+    "license": "Apache-2.0",
+    "assets": [
+      "gradle/NOTICE.txt",
+      "gradle/LICENSE.txt"
+    ]
+  },
+  {
+    "id": "openlist-dependencies",
+    "name": "OpenList dependency notices",
+    "license": "Third-party license notices",
+    "assets": [
+      "openlist/dependencies/filippo.io_edwards25519@v1.1.0.txt",
+      "openlist/dependencies/github.com_aead_ecdh@v0.2.0.txt",
+      "openlist/dependencies/github.com_aliyun_aliyun-oss-go-sdk@v3.0.2+incompatible.txt",
+      "openlist/dependencies/github.com_andreburgaud_crypt2go@v1.8.0.txt",
+      "openlist/dependencies/github.com_andybalholm_brotli@v1.2.2.txt",
+      "openlist/dependencies/github.com_avast_retry-go@v3.0.0+incompatible.txt",
+      "openlist/dependencies/github.com_aws_aws-sdk-go@v1.55.8.txt",
+      "openlist/dependencies/github.com_aymerick_douceur@v0.2.0.txt",
+      "openlist/dependencies/github.com_bits-and-blooms_bitset@v1.24.4.txt",
+      "openlist/dependencies/github.com_blevesearch_bleve_index_api@v1.4.1.txt",
+      "openlist/dependencies/github.com_blevesearch_bleve_v2@v2.6.1.txt",
+      "openlist/dependencies/github.com_blevesearch_geo@v0.2.6.txt",
+      "openlist/dependencies/github.com_blevesearch_go-porterstemmer@v1.0.3.txt",
+      "openlist/dependencies/github.com_blevesearch_gtreap@v0.1.1.txt",
+      "openlist/dependencies/github.com_blevesearch_mmap-go@v1.2.0.txt",
+      "openlist/dependencies/github.com_blevesearch_scorch_segment_api_v2@v2.4.10.txt",
+      "openlist/dependencies/github.com_blevesearch_segment@v0.9.1.txt",
+      "openlist/dependencies/github.com_blevesearch_snowballstem@v0.9.0.txt",
+      "openlist/dependencies/github.com_blevesearch_upsidedown_store_api@v1.0.2.txt",
+      "openlist/dependencies/github.com_blevesearch_vellum@v1.2.0.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v11@v11.4.3.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v12@v12.4.3.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v13@v13.4.3.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v14@v14.4.3.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v15@v15.4.3.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v16@v16.3.4.txt",
+      "openlist/dependencies/github.com_blevesearch_zapx_v17@v17.2.3.txt",
+      "openlist/dependencies/github.com_bmatcuk_doublestar_v4@v4.10.0.txt",
+      "openlist/dependencies/github.com_boombuler_barcode@v1.1.0.txt",
+      "openlist/dependencies/github.com_caarlos0_env_v9@v9.0.0.txt",
+      "openlist/dependencies/github.com_coreos_go-oidc@v2.5.0+incompatible.txt",
+      "openlist/dependencies/github.com_deckarep_golang-set_v2@v2.9.0.txt",
+      "openlist/dependencies/github.com_dlclark_regexp2@v1.12.0.txt",
+      "openlist/dependencies/github.com_dustin_go-humanize@v1.0.1.txt",
+      "openlist/dependencies/github.com_fclairamb_ftpserverlib@v0.26.1-0.20250709223522-4a925d79caf6.txt",
+      "openlist/dependencies/github.com_fclairamb_go-log@v0.6.0.txt",
+      "openlist/dependencies/github.com_fxamacker_cbor_v2@v2.9.3.txt",
+      "openlist/dependencies/github.com_gabriel-vasile_mimetype@v1.4.13.txt",
+      "openlist/dependencies/github.com_gin-contrib_cors@v1.7.7.txt",
+      "openlist/dependencies/github.com_gin-contrib_sse@v1.1.0.txt",
+      "openlist/dependencies/github.com_gin-gonic_gin@v1.12.0.txt",
+      "openlist/dependencies/github.com_glebarez_go-sqlite@v1.21.2.txt",
+      "openlist/dependencies/github.com_glebarez_sqlite@v1.11.0.txt",
+      "openlist/dependencies/github.com_go-ole_go-ole@v1.3.0.txt",
+      "openlist/dependencies/github.com_go-playground_locales@v0.14.1.txt",
+      "openlist/dependencies/github.com_go-playground_universal-translator@v0.18.1.txt",
+      "openlist/dependencies/github.com_go-playground_validator_v10@v10.30.3.txt",
+      "openlist/dependencies/github.com_go-resty_resty_v2@v2.17.2.txt",
+      "openlist/dependencies/github.com_go-sql-driver_mysql@v1.8.1.txt",
+      "openlist/dependencies/github.com_go-viper_mapstructure_v2@v2.5.0.txt",
+      "openlist/dependencies/github.com_go-webauthn_webauthn@v0.18.0.txt",
+      "openlist/dependencies/github.com_go-webauthn_x@v0.3.0.txt",
+      "openlist/dependencies/github.com_goccy_go-yaml@v1.19.2.txt",
+      "openlist/dependencies/github.com_golang-jwt_jwt_v4@v4.5.2.txt",
+      "openlist/dependencies/github.com_golang-jwt_jwt_v5@v5.3.1.txt",
+      "openlist/dependencies/github.com_golang_snappy@v1.0.0.txt",
+      "openlist/dependencies/github.com_google_go-tpm@v0.9.8.txt",
+      "openlist/dependencies/github.com_google_uuid@v1.6.0.txt",
+      "openlist/dependencies/github.com_gorilla_css@v1.0.1.txt",
+      "openlist/dependencies/github.com_itsHenry35_gofakes3@v0.0.8.txt",
+      "openlist/dependencies/github.com_jackc_pgpassfile@v1.0.0.txt",
+      "openlist/dependencies/github.com_jackc_pgservicefile@v0.0.0-20240606120523-5a60cdf6a761.txt",
+      "openlist/dependencies/github.com_jackc_pgx_v5@v5.10.0.txt",
+      "openlist/dependencies/github.com_jackc_puddle_v2@v2.2.2.txt",
+      "openlist/dependencies/github.com_jinzhu_inflection@v1.0.0.txt",
+      "openlist/dependencies/github.com_jinzhu_now@v1.1.5.txt",
+      "openlist/dependencies/github.com_jmespath_go-jmespath@v0.4.0.txt",
+      "openlist/dependencies/github.com_josharian_intern@v1.0.0.txt",
+      "openlist/dependencies/github.com_json-iterator_go@v1.1.12.txt",
+      "openlist/dependencies/github.com_jzelinskie_whirlpool@v0.0.0-20201016144138-0675e54bb004.txt",
+      "openlist/dependencies/github.com_klauspost_cpuid_v2@v2.4.0.txt",
+      "openlist/dependencies/github.com_leodido_go-urn@v1.4.0.txt",
+      "openlist/dependencies/github.com_mailru_easyjson@v0.9.2.txt",
+      "openlist/dependencies/github.com_maruel_natural@v1.3.0.txt",
+      "openlist/dependencies/github.com_matoous_go-nanoid_v2@v2.1.0.txt",
+      "openlist/dependencies/github.com_mattn_go-isatty@v0.0.23.txt",
+      "openlist/dependencies/github.com_meilisearch_meilisearch-go@v0.32.0.txt",
+      "openlist/dependencies/github.com_microcosm-cc_bluemonday@v1.0.27.txt",
+      "openlist/dependencies/github.com_minio_xxml@v0.0.3.txt",
+      "openlist/dependencies/github.com_modern-go_concurrent@v0.0.0-20180306012644-bacd9c7ef1dd.txt",
+      "openlist/dependencies/github.com_modern-go_reflect2@v1.0.2.txt",
+      "openlist/dependencies/github.com_mschoch_smat@v0.2.0.txt",
+      "openlist/dependencies/github.com_natefinch_lumberjack@v2.0.0+incompatible.txt",
+      "openlist/dependencies/github.com_ncw_swift_v2@v2.0.5.txt",
+      "openlist/dependencies/github.com_OpenListTeam_115-sdk-go@v0.2.6.txt",
+      "openlist/dependencies/github.com_OpenListTeam_go-cache@v0.1.0.txt",
+      "openlist/dependencies/github.com_OpenListTeam_gsync@v0.1.0.txt",
+      "openlist/dependencies/github.com_OpenListTeam_sftpd-openlist@v1.0.1.txt",
+      "openlist/dependencies/github.com_OpenListTeam_tache@v0.2.2.txt",
+      "openlist/dependencies/github.com_pelletier_go-toml_v2@v2.2.4.txt",
+      "openlist/dependencies/github.com_philhofer_fwd@v1.2.0.txt",
+      "openlist/dependencies/github.com_pierrec_lz4_v4@v4.1.27.txt",
+      "openlist/dependencies/github.com_pkg_errors@v0.9.1.txt",
+      "openlist/dependencies/github.com_pquerna_cachecontrol@v0.1.0.txt",
+      "openlist/dependencies/github.com_pquerna_otp@v1.5.0.txt",
+      "openlist/dependencies/github.com_quic-go_qpack@v0.6.0.txt",
+      "openlist/dependencies/github.com_quic-go_quic-go@v0.61.0.txt",
+      "openlist/dependencies/github.com_rclone_rclone@v1.75.0.txt",
+      "openlist/dependencies/github.com_remyoudompheng_bigfft@v0.0.0-20230129092748-24d4a6f8daec.txt",
+      "openlist/dependencies/github.com_RoaringBitmap_roaring_v2@v2.14.5.txt",
+      "openlist/dependencies/github.com_ryszard_goskiplist@v0.0.0-20150312221310-2dfbae5fcf46.txt",
+      "openlist/dependencies/github.com_SheltonZhu_115driver@v1.3.5.txt",
+      "openlist/dependencies/github.com_shirou_gopsutil_v4@v4.26.8.txt",
+      "openlist/dependencies/github.com_sirupsen_logrus@v1.10.2.txt",
+      "openlist/dependencies/github.com_skip2_go-qrcode@v0.0.0-20200617195104-da1b6568686e.txt",
+      "openlist/dependencies/github.com_spf13_afero@v1.15.0.txt",
+      "openlist/dependencies/github.com_taruti_bytepool@v0.0.0-20160310082835-5e3a9ea56543.txt",
+      "openlist/dependencies/github.com_tchap_go-patricia_v2@v2.3.3.txt",
+      "openlist/dependencies/github.com_tinylib_msgp@v1.6.4.txt",
+      "openlist/dependencies/github.com_ugorji_go_codec@v1.3.1.txt",
+      "openlist/dependencies/github.com_x448_float16@v0.8.4.txt",
+      "openlist/dependencies/github.com_yusufpapurcu_wmi@v1.2.4.txt",
+      "openlist/dependencies/github.com_zeebo_blake3@v0.2.4.txt",
+      "openlist/dependencies/github.com_zeebo_xxh3@v1.1.0.txt",
+      "openlist/dependencies/go.etcd.io_bbolt@v1.5.0.txt",
+      "openlist/dependencies/go.mongodb.org_mongo-driver_v2@v2.5.0.txt",
+      "openlist/dependencies/go.mongodb.org_mongo-driver@v1.17.9.txt",
+      "openlist/dependencies/go4.org@v0.0.0-20260112195520-a5071408f32f.txt",
+      "openlist/dependencies/golang.org_x_crypto@v0.57.0.txt",
+      "openlist/dependencies/golang.org_x_net@v0.59.0.txt",
+      "openlist/dependencies/golang.org_x_oauth2@v0.36.0.txt",
+      "openlist/dependencies/golang.org_x_sync@v0.23.0.txt",
+      "openlist/dependencies/golang.org_x_sys@v0.48.0.txt",
+      "openlist/dependencies/golang.org_x_text@v0.42.0.txt",
+      "openlist/dependencies/golang.org_x_time@v0.15.0.txt",
+      "openlist/dependencies/google.golang.org_protobuf@v1.36.11.txt",
+      "openlist/dependencies/gopkg.in_asn1-ber.v1@v1.0.0-20181015200546-f715ec2f112d.txt",
+      "openlist/dependencies/gopkg.in_go-jose_go-jose.v2@v2.6.3.txt",
+      "openlist/dependencies/gopkg.in_ldap.v3@v3.1.0.txt",
+      "openlist/dependencies/gopkg.in_yaml.v3@v3.0.1.txt",
+      "openlist/dependencies/gorm.io_driver_mysql@v1.6.0.txt",
+      "openlist/dependencies/gorm.io_driver_postgres@v1.6.2.txt",
+      "openlist/dependencies/gorm.io_gorm@v1.31.2.txt",
+      "openlist/dependencies/modernc.org_libc@v1.22.5.txt",
+      "openlist/dependencies/modernc.org_mathutil@v1.5.0.txt",
+      "openlist/dependencies/modernc.org_memory@v1.5.0.txt",
+      "openlist/dependencies/modernc.org_sqlite@v1.23.1.txt",
+      "openlist/dependencies/resty.dev_v3@v3.0.0-beta.2.txt"
+    ]
+  }
 ]

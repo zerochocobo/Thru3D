@@ -4,7 +4,7 @@
 
 Standalone Android VR/MR media player for Meta Quest and PICO. Thru3D combines a Godot OpenXR interface, Android media access, a native libmpv renderer, and MNN inference for video matting and depth-based stereo rendering.
 
-Current source version: **0.3.1** (Android versionCode **6**). An experimental standard OpenXR Android export is also available.
+Current source version: **0.5.0** (Android versionCode **10**). An experimental standard OpenXR Android export is also available.
 
 Minimum compatibility targets are **Quest 2** and **PICO Neo3**. Source/build compatibility does not establish hardware performance or interaction acceptance on every device.
 
@@ -13,13 +13,16 @@ Minimum compatibility targets are **Quest 2** and **PICO Neo3**. Source/build co
 - Video and photo viewing: flat, 180° and 360° projections; mono and side-by-side stereo.
 - Person matting and passthrough composition for supported 180° video projections.
 - Depth-based 2D-to-3D viewing for flat mono videos and photos.
-- Local Android document access, SMB, WebDAV, DLNA and media-server libraries; native 115/Baidu adapters.
+- Local Android document access, SMB, WebDAV, DLNA and media-server libraries; 115, Baidu, Aliyun Drive, Quark and OneDrive connections.
 - Audio tracks, subtitles, playback controls and per-file viewing preferences.
 - Controller ray/trigger selection and hand interaction; English, Chinese and Japanese UI.
 - Persistent timestamp bookmarks, source-frame previews for recent playback, and paged media navigation.
 - Rendered hands/controllers and display-quality controls, including sharpness and flat-screen adjustments.
 - VR-native account forms and in-app web login; speed-first and precise seek policies.
 - Immersive photo presentation, pinch-drag navigation, adjacent-photo preload and cached 3D conversion; photo stereo strength is capped at 100%.
+
+- Media-server sections, filters, details, continuation pages and capability-dependent favorites; manual DLNA endpoints and exposed external subtitles.
+- Photo distance/size controls and a separate 2–8× magnifier referenced to the displayed image; source-dependent file management.
 
 ## Source release
 
@@ -45,6 +48,7 @@ libmpv / FFmpeg → shared GPU video textures → Godot stereo rendering
 | `app/godot` | XR scenes, menus, shaders, localization and host tests |
 | `android` | Kotlin Godot plugin, Gradle wrapper and JVM tests |
 | `native` | JNI media bridge, rendering and inference backends |
+| `cloud/openlist` | Embedded OpenList Go adapter and synthetic tests |
 | `tools` | Build, conversion and verification entry points |
 | `models` | Model contracts, checksums and licenses; no weights |
 | `third_party` | Dependency sources, patches, provenance and notices |
@@ -93,3 +97,5 @@ Read [architecture](docs/ARCHITECTURE.md), [build](docs/BUILD.md), [models](docs
 ## License
 
 Project-owned source is released under **GPL-3.0-only**. See [LICENSE](LICENSE) for the complete GNU GPL v3 text and [licensing scope](docs/LICENSING.md) for third-party code, models, assets and binary distribution requirements. Third-party components keep their existing licenses; this declaration does not relicense them or grant rights to excluded assets.
+
+The embedded OpenList component is **AGPL-3.0**; its adapter, pinned build recipe and upstream/dependency notices are included. Combined binary distribution must satisfy its applicable AGPL obligations as explained in the licensing scope.

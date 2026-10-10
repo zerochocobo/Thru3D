@@ -97,13 +97,106 @@ internal class SmbLibrary(private val context: Context, private val streams: () 
                 val name = child.name.trimEnd('/')
                 if (name.endsWith("$")) continue // administrative shares
                 val childPath = if (clean.isEmpty()) name else "$clean/$name"
-                if (child.isDirectory) entries.put(JSONObject().put("id", childPath).put("title", name).put("container", true))
+                if (child.isDirectory) entries.put(JSONObject().put("id", childPath).put("title", name).put("container", true)
+                    .put("delete_uri", "smb://$id/$childPath").put("can_delete", clean.isNotEmpty() && child.attributes and 0x401 == 0)
+                    .put("delete_reason", "File deletion unavailable for this source"))
                 else if (MediaKinds.supported(name)) entries.put(JSONObject().put("id", childPath).put("title", name).put("kind", MediaKinds.kind(name))
-                    .put("container", false).put("size", child.length()).put("uri", "smb://$id/$childPath"))
+                    .put("container", false).put("size", child.length()).put("uri", "smb://$id/$childPath")
+                    .put("modified", child.lastModified().takeIf { it > 0 } ?: -1)
+                    .put("can_delete", child.attributes and org.codelibs.jcifs.smb.SmbConstants.ATTR_READONLY == 0 && runCatching { MediaDeletePolicy.smbPath(childPath) }.isSuccess)
+                    .put("delete_reason", "File is read-only"))
                 child.close()
             }
         }
         return entries
+    }
+
+    fun renameFile(request: JSONObject, prepare: Boolean): JSONObject {
+        val rest = request.getString("uri").removePrefix("smb://")
+        val id = rest.substringBefore('/')
+        val server = server(id)
+        val path = MediaDeletePolicy.smbPath(rest.substringAfter('/'))
+        val parent = path.substringBeforeLast('/')
+        val context = cifs(server)
+        val names = SmbFile("smb://${server.host}/$parent/", context).use { it.list().map { name -> name.trimEnd('/') } }
+        val bundle = RenameBundle(path.substringAfterLast('/'), request.getString("new_name"), names)
+        val expected = HashMap<String, Pair<Long, Long>>()
+        val fingerprint = bundle.fingerprint { name ->
+            MediaDeletePolicy.smbPath("$parent/$name", true)
+            SmbFile("smb://${server.host}/$parent/$name", context).use { child ->
+                check(child.isFile && child.attributes and 0x401 == 0) { "File is read-only" }
+                (child.length() to child.lastModified()).also { expected[name] = it }
+            }
+        }
+        SmbFile("smb://${server.host}/$path", context).use { MediaDeletePolicy.unchanged(it.length(), it.lastModified(), request.getLong("size"), request.getLong("modified")) }
+        if (prepare) return JSONObject().put("preview", true).put("plan", fingerprint).put("moves", bundle.preview())
+        check(fingerprint == request.optString("plan")) { "Folder changed; check its contents again" }
+        return bundle.execute(inspect = { move ->
+            fun state(name: String): Pair<Boolean, Boolean> = SmbFile("smb://${server.host}/$parent/$name", context).use { child ->
+                val exists = child.exists()
+                exists to (exists && child.isFile && (child.length() to child.lastModified()) == expected.getValue(move.from))
+            }
+            val old = state(move.from); val new = state(move.to)
+            if (old.second && !new.first) 0 else if (new.second && !old.first) 1 else -1
+        }) { from, to ->
+            SmbFile("smb://${server.host}/$parent/$from", context).use { source ->
+                SmbFile("smb://${server.host}/$parent/$to", context).use { destination -> source.renameTo(destination) }
+            }
+        }.put("new_uri", "smb://$id/$parent/${bundle.moves[0].to}").put("new_title", bundle.moves[0].to)
+    }
+
+    fun deleteFile(request: JSONObject, inspect: Boolean, prepare: Boolean = false): JSONObject {
+        val uri = request.getString("uri")
+        require(uri.startsWith("smb://"))
+        val rest = uri.removePrefix("smb://")
+        val server = server(rest.substringBefore('/'))
+        val folder = request.optBoolean("folder")
+        val path = MediaDeletePolicy.smbPath(rest.substringAfter('/'), folder)
+        SmbFile("smb://${server.host}/$path", cifs(server)).use { file ->
+            if (inspect) return JSONObject().put("exists", file.exists())
+            if (folder) {
+                val entries = ArrayList<DeleteTree.Entry>()
+                fun visit(current: SmbFile, relative: String, depth: Int) {
+                    check(depth <= 64 && entries.size < DeleteTree.LIMIT) { "Folder too large to delete" }
+                    check(current.attributes and 0x401 == 0) { "Folder contains unsupported links" }
+                    val directory = current.isDirectory
+                    if (relative.isNotEmpty()) MediaDeletePolicy.smbPath("$path/$relative", true)
+                    entries.add(DeleteTree.Entry(relative, directory, if (directory) 0 else current.length(), current.lastModified()))
+                    if (directory) {
+                        val children = current.listFiles()
+                        try { children.forEach { child ->
+                            val name = child.name.trimEnd('/')
+                            require(name.isNotEmpty() && name !in setOf(".", "..") && !name.contains('/'))
+                            visit(child, if (relative.isEmpty()) name else "$relative/$name", depth + 1)
+                        } } finally { children.forEach { it.close() } }
+                    }
+                }
+                check(file.isDirectory) { "Folder changed; check its contents again" }
+                visit(file, "", 0)
+                val plan = DeleteTree(entries)
+                if (prepare) return plan.summary()
+                plan.verify(request)
+                var removed = 0
+                for (entry in entries.sortedByDescending { it.path.count { c -> c == '/' } * 2 + if (it.path.isEmpty()) -1 else 0 }) {
+                    val childPath = path + if (entry.path.isEmpty()) "" else "/${entry.path}"
+                    try { SmbFile("smb://${server.host}/$childPath", cifs(server)).use { child ->
+                        check(child.attributes and 0x401 == 0)
+                        org.codelibs.jcifs.smb.impl.SingleMediaDelete.delete(child, entry.folder)
+                    } } catch (_: Exception) {
+                        return JSONObject().put("state", "uncertain").put("partial", removed > 0)
+                            .put("error", if (removed > 0) "Some contents were deleted; check the folder" else "Delete result needs checking")
+                    }
+                    removed++
+                }
+                return JSONObject().put("deleted", true)
+            }
+            check(file.isFile && file.attributes and org.codelibs.jcifs.smb.SmbConstants.ATTR_READONLY == 0) { "File is read-only" }
+            MediaDeletePolicy.unchanged(file.length(), file.lastModified(), request.getLong("size"), request.getLong("modified"))
+            org.codelibs.jcifs.smb.impl.SingleMediaDelete.delete(file)
+        }
+        // A fresh locator bypasses JCIFS's positive existence cache.
+        SmbFile("smb://${server.host}/$path", cifs(server)).use { check(!it.exists()) { "Delete result needs checking" } }
+        return JSONObject().put("deleted", true)
     }
 
     /** Sibling "<stem>*.m4a" tracks of an smb:// video, each as a loopback stream (see [SidecarAudio]). */

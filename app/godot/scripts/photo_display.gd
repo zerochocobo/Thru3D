@@ -7,6 +7,9 @@ const ModeMemory := preload("res://scripts/file_mode_memory.gd")
 const SHADER := preload("res://shaders/photo.gdshader")
 const Methods := preload("res://scripts/platform_methods.gd")
 const CACHE_IMAGE_BYTES := 32 * 1024 * 1024
+const RECENT_FILE_BYTES := 128 * 1024 * 1024
+const RECENT_FILE_COUNT := 4
+var _recent_files := {} # Source/depth/pair files only; no extra decoded images or textures.
 var _prefetched := {}
 var _prefetch_failed := {}
 var _prefetch_request := 0
@@ -20,6 +23,9 @@ var _deferred_release_ids := {}
 var _pending_display := {}
 var _display_depth_data := {}
 var _prefetch_depth_request := 0
+var _promoted_depth_request := 0
+var _incoming_depth_result := {}
+var _navigation_direction := 1
 var platform: Object
 var catalog: RefCounted
 var history_enabled := true
@@ -60,10 +66,18 @@ var _detail: MeshInstance3D
 var _detail_material: ShaderMaterial
 var _detail_zoom: Label3D
 var _detail_direction := Vector3.FORWARD
+var _inspect_line: MeshInstance3D
+var _inspect_dot: MeshInstance3D
+var _inspect_pointer_material: StandardMaterial3D
 var mode_memory := ModeMemory.new("user://photo_settings")
-var mode_lock := {} # Independent of the video lock; used for unmarked, unremembered photos.
 
 const DEFAULT_CURVE := 0.35
+const DEFAULT_DISTANCE := 3.0
+const PHOTO_DISTANCE_LIMITS := Vector2(0.3, 10.0)
+const PHOTO_SCALE_LIMITS := Vector2(0.4, 6.0)
+const INSPECT_LIMITS := Vector2(2.0, 8.0)
+const DEFAULT_MAGNIFICATION := 2.0
+var inspect_magnification := DEFAULT_MAGNIFICATION
 const IMMERSIVE_SIZE := Vector2(3.8, 2.6)
 const SOFT_EDGE_METRES := 0.07
 const TRANSITION_SECONDS := 0.24
@@ -75,6 +89,29 @@ var _transition_width := 0.0
 
 func _init() -> void:
 	screen_curve = DEFAULT_CURVE
+	screen_distance = DEFAULT_DISTANCE
+	flat_pose.origin.z = -DEFAULT_DISTANCE
+
+func restore_view_settings(settings: ConfigFile) -> void:
+	var distance := float(settings.get_value("photo_screen", "distance", DEFAULT_DISTANCE))
+	var scale := float(settings.get_value("photo_screen", "scale", 1.0))
+	var curve := float(settings.get_value("photo_screen", "curve", DEFAULT_CURVE))
+	var zoom := float(settings.get_value("photo_screen", "magnification", DEFAULT_MAGNIFICATION))
+	screen_distance = clampf(distance, PHOTO_DISTANCE_LIMITS.x, PHOTO_DISTANCE_LIMITS.y) if is_finite(distance) else DEFAULT_DISTANCE
+	screen_scale = clampf(scale, PHOTO_SCALE_LIMITS.x, PHOTO_SCALE_LIMITS.y) if is_finite(scale) else 1.0
+	screen_curve = clampf(curve, 0.0, 1.0) if is_finite(curve) else DEFAULT_CURVE
+	inspect_magnification = clampf(zoom, INSPECT_LIMITS.x, INSPECT_LIMITS.y) if is_finite(zoom) else DEFAULT_MAGNIFICATION
+
+func set_screen_distance(value: float) -> void:
+	if not is_finite(value): return
+	screen_distance = clampf(value, PHOTO_DISTANCE_LIMITS.x, PHOTO_DISTANCE_LIMITS.y)
+	_shape_screen()
+
+func set_screen_scale(value: float) -> void:
+	if not is_finite(value): return
+	screen_scale = clampf(value, PHOTO_SCALE_LIMITS.x, PHOTO_SCALE_LIMITS.y)
+	_flat.size = _screen_base * screen_scale
+	_shape_screen()
 
 func _screen_dimensions(aspect: float) -> Vector2:
 	var width := minf(IMMERSIVE_SIZE.x, IMMERSIVE_SIZE.y * aspect)
@@ -93,21 +130,15 @@ func hand_zoomed() -> bool:
 	return inspect or screen_scale > 1.05
 
 func set_hand_scale(value: float) -> void:
-	if inspect:
-		magnification = clampf(value, 1.0, 8.0)
-		if magnification <= 1.01: reset_view()
-		else: _update_inspect()
-	else:
-		set_screen_scale(value)
+	if inspect: return
+	set_screen_scale(value)
 	changed.emit()
 
 func pan_hand(step: Vector2) -> void:
-	if inspect:
-		pan_content(Vector2(-step.x, step.y) * 2.5)
-	else:
-		# Translate within the photo's plane; do not orbit a magnified photo round the head.
-		flat_pose.origin += flat_pose.basis * Vector3(step.x, step.y, 0) * 3.0
-		panel.transform = flat_pose
+	if inspect: return
+	# Translate within the photo's plane; do not orbit a magnified photo round the head.
+	flat_pose.origin += flat_pose.basis * Vector3(step.x, step.y, 0) * 3.0
+	panel.transform = flat_pose
 
 func _ready() -> void:
 	initialize_surface(SHADER)
@@ -139,6 +170,24 @@ func _ready() -> void:
 	_detail_zoom.position = Vector3(0.35, -0.274, 0.003)
 	_detail_zoom.render_priority = 3
 	_detail.add_child(_detail_zoom)
+	_inspect_pointer_material = StandardMaterial3D.new()
+	_inspect_pointer_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_inspect_pointer_material.no_depth_test = true
+	_inspect_pointer_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_inspect_pointer_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_inspect_pointer_material.render_priority = 14
+	_inspect_line = MeshInstance3D.new()
+	_inspect_line.mesh = ImmediateMesh.new()
+	_inspect_line.material_override = _inspect_pointer_material
+	_inspect_line.visible = false
+	add_child(_inspect_line)
+	_inspect_dot = MeshInstance3D.new()
+	var dot := SphereMesh.new()
+	dot.radius = 0.009; dot.height = 0.018
+	_inspect_dot.mesh = dot
+	_inspect_dot.material_override = _inspect_pointer_material
+	_inspect_dot.visible = false
+	add_child(_inspect_dot)
 	if OS.get_name() == "Android" and Engine.has_singleton("QuestPlayer"):
 		platform = Engine.get_singleton("QuestPlayer")
 		platform.connect("photo_ready", _on_ready)
@@ -175,6 +224,9 @@ func _select(target: int, direction: int = 0) -> bool:
 	if target == index and not loading: return false
 	finish_transition()
 	var cached: Dictionary = _prefetched.get(target, {})
+	if cached.is_empty(): cached = _recent_files.get(target, {})
+	_promoted_depth_request = 0
+	_incoming_depth_result = {}
 	_pause_prefetch(int(cached.get("id", 0)) if cached.has("info") else 0)
 	_serial += 1
 	_pending_display = {}
@@ -189,11 +241,13 @@ func _select(target: int, direction: int = 0) -> bool:
 		return true
 	pending_index = target
 	_requested_direction = direction if direction != 0 else (1 if target > index else -1)
+	_navigation_direction = _requested_direction
 	loading = true
 	error = ""
 	var item := queue[target]
 	if cached.has("info") and (not platform or platform.activate_photo(int(cached.id))):
 		_prefetched.erase(target)
+		_recent_files.erase(target)
 		_request = int(cached.id)
 		var job := {"id": _request, "serial": _serial, "index": target, "info": cached.info, "direction": _requested_direction,
 			"depth_data": cached.get("depth_data", {})}
@@ -201,7 +255,11 @@ func _select(target: int, direction: int = 0) -> bool:
 		else: _next_decode = job
 		changed.emit()
 		return true
-	if not cached.is_empty(): _drop_prefetch(target)
+	if not cached.is_empty():
+		_promoted_depth_request = 0
+		if _recent_files.has(target):
+			_release_photo(int(_recent_files[target].id), true); _recent_files.erase(target)
+		else: _drop_prefetch(target)
 	_request = platform.open_photo(str(item.uri)) if platform else _serial
 	if _request <= 0:
 		loading = false; error = "Image unavailable"; changed.emit(); return false
@@ -268,8 +326,10 @@ func _process(delta: float) -> void:
 	_process_depth_jobs()
 	if _depth_rebuild_seconds > 0:
 		_depth_rebuild_seconds = maxf(0, _depth_rebuild_seconds - delta)
-		if _depth_rebuild_seconds == 0 and depth_requested and _display_request > 0:
-			_depth_busy = _prepare_depth(_display_request)
+		if _depth_rebuild_seconds == 0 and depth_requested:
+			# A strength change during navigation belongs to the incoming photo.
+			var target_request := _request if loading else _display_request
+			if target_request > 0: _depth_busy = _prepare_depth(target_request)
 	if _thread and not _thread.is_alive():
 		var result: Dictionary = _thread.wait_to_finish()
 		_thread = null
@@ -324,7 +384,7 @@ func _release_photo(id: int, cancel: bool = false) -> void:
 func _neighbors(position: int) -> Array[int]:
 	var result: Array[int] = []
 	if queue.size() <= 1 or position < 0: return result
-	for target in [posmod(position + 1, queue.size()), posmod(position - 1, queue.size())]:
+	for target in [posmod(position + _navigation_direction, queue.size()), posmod(position - _navigation_direction, queue.size())]:
 		if target not in result and target != position: result.append(target)
 	return result
 
@@ -332,6 +392,7 @@ func _drop_prefetch(target: int) -> void:
 	if not _prefetched.has(target): return
 	var id := int(_prefetched[target].id)
 	_prefetched.erase(target)
+	if int(_prefetch_decode.get("id", 0)) == id: _prefetch_decode = {}
 	if _prefetch_request == id: _prefetch_request = 0
 	if _prefetch_depth_request == id:
 		if Methods.supports(platform, "cancel_preloaded_photo_depth"): platform.cancel_preloaded_photo_depth()
@@ -341,7 +402,9 @@ func _drop_prefetch(target: int) -> void:
 
 func _pause_prefetch(except_id: int = 0) -> void:
 	if _prefetch_depth_request != 0:
-		if Methods.supports(platform, "cancel_preloaded_photo_depth"): platform.cancel_preloaded_photo_depth()
+		if _prefetch_depth_request == except_id:
+			_promoted_depth_request = except_id
+		elif Methods.supports(platform, "cancel_preloaded_photo_depth"): platform.cancel_preloaded_photo_depth()
 		_prefetch_depth_request = 0
 	if _prefetch_request != 0 and _prefetch_request != except_id:
 		for target in _prefetched.keys():
@@ -351,19 +414,48 @@ func _pause_prefetch(except_id: int = 0) -> void:
 func _prune_prefetch() -> void:
 	var wanted: Array = _neighbors(index) if geometry == Geometry.Geometry.FLAT and _cache_supported() else []
 	for target in _prefetched.keys():
-		if target not in wanted: _drop_prefetch(target)
+		if target not in wanted:
+			if geometry == Geometry.Geometry.FLAT: _remember_files(target)
+			else: _drop_prefetch(target)
+	if geometry != Geometry.Geometry.FLAT:
+		for entry in _recent_files.values(): _release_photo(int(entry.id), true)
+		_recent_files.clear()
+
+func _remember_files(target: int) -> void:
+	var entry: Dictionary = _prefetched[target]
+	var bytes := maxi(int(entry.get("info", {}).get("cache_bytes", 0)), int(entry.get("depth_data", {}).get("cache_bytes", 0)))
+	if not entry.has("info") or bytes <= 0 or bytes > RECENT_FILE_BYTES or int(entry.id) == _prefetch_depth_request:
+		_drop_prefetch(target)
+		return
+	_prefetched.erase(target)
+	if int(_prefetch_decode.get("id", 0)) == int(entry.id): _prefetch_decode = {}
+	var info: Dictionary = entry.info.duplicate()
+	info["cache_bytes"] = bytes
+	_recent_files[target] = {"id":entry.id, "info":info, "decoded":false}
+	var total := 0
+	for item in _recent_files.values(): total += int(item.info.cache_bytes)
+	while _recent_files.size() > RECENT_FILE_COUNT or total > RECENT_FILE_BYTES:
+		var oldest: int = _recent_files.keys()[0]
+		total -= int(_recent_files[oldest].info.cache_bytes)
+		_release_photo(int(_recent_files[oldest].id), true)
+		_recent_files.erase(oldest)
 
 func _pump_prefetch() -> void:
 	_prune_prefetch()
 	if index < 0 or geometry != Geometry.Geometry.FLAT or not _cache_supported(): return
 	if _prefetch_depth_request != 0: return
 	for target in _neighbors(index):
+		if not _prefetched.has(target) and _recent_files.has(target):
+			_prefetched[target] = _recent_files[target]
+			_recent_files.erase(target)
 		if _prefetched.has(target):
 			var entry: Dictionary = _prefetched[target]
 			if entry.has("info") and not entry.get("decoded", false) and _prefetch_decode.is_empty() \
 				and not (_decoding.get("prefetch", false) and int(_decoding.id) == int(entry.id)):
 				_prefetch_decode = {"id": entry.id, "index": target, "info": entry.info, "prefetch": true, "epoch": _cache_epoch}
-			if entry.has("info") and _requires_depth(target, entry.info) and not entry.has("depth_data") \
+			var needs_depth: bool = not entry.has("depth_data") or (Methods.supports(platform, "prepare_photo_3d") \
+				and not is_equal_approx(float(entry.get("depth_data", {}).get("strength", -1)), depth_strength))
+			if entry.has("info") and _requires_depth(target, entry.info) and needs_depth and _depth_rebuild_seconds == 0 \
 				and not entry.get("depth_failed", false) and _prefetch_request == 0 \
 				and Methods.supports(platform, "prepare_preloaded_photo_depth"):
 				_prefetch_depth_request = int(entry.id)
@@ -406,16 +498,24 @@ func _prepare_display(result: Dictionary, job: Dictionary) -> void:
 		_accept(result, job)
 		return
 	var depth_data: Dictionary = result.get("depth_data", job.get("depth_data", {}))
+	if int(_incoming_depth_result.get("id", 0)) == int(job.id):
+		depth_data = _incoming_depth_result.data
+		_incoming_depth_result = {}
+		if depth_data.is_empty():
+			_fail_pending_depth()
+			return
 	if not depth_data.is_empty() and (not Methods.supports(platform, "prepare_photo_3d") or
 		(depth_data.has("stereo_image") and is_equal_approx(float(depth_data.get("strength", -1)), depth_strength))):
 		result["depth_data"] = depth_data
 		_accept(result, job)
 		return
 	_pending_display = {"result": result, "job": job, "serial": _serial}
-	if not _prepare_depth(int(job.id)): _fail_pending_depth()
+	if _promoted_depth_request == int(job.id): changed.emit()
+	elif not _prepare_depth(int(job.id)): _fail_pending_depth()
 	else: changed.emit()
 
 func _fail_pending_depth() -> void:
+	_promoted_depth_request = 0; _incoming_depth_result = {}
 	_pending_display = {}; loading = false; error = "3D unavailable"
 	if _request != _display_request: _release_photo(_request, true)
 	_request = _display_request
@@ -534,6 +634,7 @@ func _apply_geometry() -> void:
 
 func set_projection(value: int) -> void:
 	if value not in [0, 1, 2, 3]: return
+	if value != geometry: _unlock_mode()
 	geometry = value
 	if value != 0: depth_requested = false; depth_enabled = false
 	elif auto_depth and not stereo_sbs: set_depth(true)
@@ -543,6 +644,8 @@ func cycle_projection() -> void:
 	set_projection((geometry + 1) % 4)
 
 func set_stereo_layout(layout: int) -> void:
+	if layout not in [0, 1, 2]: return
+	if layout != current_lock().layout: _unlock_mode()
 	stereo_sbs = layout != 0; top_bottom = layout == 2
 	if stereo_sbs: depth_requested = false; depth_enabled = false
 	elif auto_depth and geometry == 0: set_depth(true)
@@ -556,7 +659,9 @@ func toggle_eye_order() -> bool:
 	swap_eyes = not swap_eyes; _apply_geometry(); _remember_mode(); changed.emit(); return true
 
 func set_fisheye_fov(value: int) -> void:
-	if value in FISHEYE_FOVS: fisheye_fov = value; _apply_geometry(); _remember_mode(); changed.emit()
+	if value not in FISHEYE_FOVS or value == fisheye_fov: return
+	_unlock_mode()
+	fisheye_fov = value; _apply_geometry(); _remember_mode(); changed.emit()
 
 func _remember_mode() -> void:
 	if local_uri.is_empty(): return
@@ -571,6 +676,7 @@ func current_lock() -> Dictionary:
 func toggle_mode_lock() -> void:
 	var current := current_lock()
 	mode_lock = {} if mode_lock == current else current
+	mode_lock_changed.emit(mode_lock.duplicate())
 	changed.emit()
 
 func load_mode_lock(value: Variant) -> void:
@@ -584,9 +690,17 @@ func load_mode_lock(value: Variant) -> void:
 		"depth": bool(value.depth) and int(value.layout) == 0 and int(value.geometry) == 0, "fisheye_fov": int(value.fisheye_fov)}
 
 func toggle_inspect() -> void:
-	inspect = not inspect
-	magnification = 2.0 if inspect else 1.0
-	if inspect and geometry != Geometry.Geometry.FLAT: _place_detail()
+	if inspect:
+		close_inspect()
+		return
+	inspect = true
+	magnification = inspect_magnification
+	_place_detail()
+	_update_inspect(); changed.emit()
+
+func close_inspect() -> void:
+	inspect = false; magnification = 1.0; crop_center = Vector2(0.5, 0.5)
+	hide_inspect_pointer()
 	_update_inspect(); changed.emit()
 
 func _place_detail() -> void:
@@ -599,31 +713,79 @@ func reset_view() -> void:
 	inspect = false; magnification = 1.0; crop_center = Vector2(0.5, 0.5)
 	if _detail_material: _update_inspect()
 
-func zoom_view(amount: float) -> void:
-	if not inspect:
-		inspect = true
-		if geometry != Geometry.Geometry.FLAT: _place_detail()
-	magnification = clampf(magnification * exp(amount * 2.0), 1.0, 8.0)
-	_update_inspect(); changed.emit()
+## The saved default is a parameter; a visible detail window keeps its opening value.
+func set_inspect_magnification(value: float) -> void:
+	if not is_finite(value): return
+	inspect_magnification = clampf(value, INSPECT_LIMITS.x, INSPECT_LIMITS.y)
+	changed.emit()
+
+func zoom_view(_amount: float) -> void:
+	if not inspect: toggle_inspect()
 
 ## The right stick scales the whole flat photo, including its mesh and corner hit targets.
-## The explicit inspect controls still magnify a crop; panoramas use their detail window.
+## Inspect uses a separate detail window for both flat photos and panoramas.
 func zoom_picture(amount: float) -> void:
+	if inspect: return
 	if geometry != Geometry.Geometry.FLAT:
 		zoom_view(amount)
 		return
 	set_screen_scale(screen_scale * exp(amount * 2.0))
 	changed.emit()
 
-func inspect_ray(origin: Vector3, direction: Vector3, drag: bool = false) -> bool:
-	if not inspect or not panel.visible: return false
+func inspect_ray(origin: Vector3, direction: Vector3, _drag: bool = false) -> bool:
+	if not inspect or not panel.visible or not origin.is_finite() or not direction.is_finite() or direction.length_squared() < 0.000001: return false
 	if geometry == Geometry.Geometry.FLAT:
 		var uv := _inspect_uv(origin, direction)
 		if not Rect2(0, 0, 1, 1).has_point(uv): return false
-		if not drag: crop_center += (uv - Vector2(0.5, 0.5)) / magnification
+		crop_center = uv
 	else:
 		_detail_direction = (panel.global_basis.inverse() * direction).normalized()
 	_update_inspect(); return true
+
+func hide_inspect_pointer() -> void:
+	if _inspect_line: _inspect_line.visible = false
+	if _inspect_dot: _inspect_dot.visible = false
+
+## The same ray selects a sample and shows its endpoint, including for optical hands.
+func update_inspect_pointer(origin: Vector3, direction: Vector3, hand: String = "right_hand") -> bool:
+	if not inspect or not panel.visible or not origin.is_finite() or not direction.is_finite() or direction.length_squared() < 0.000001:
+		hide_inspect_pointer()
+		return false
+	var ray := direction.normalized()
+	var hit: bool = inspect_ray(origin, ray)
+	var endpoint := origin + ray * 4.0
+	if hit and geometry == Geometry.Geometry.FLAT:
+		var uv := _inspect_uv(origin, ray)
+		var x := (uv.x - 0.5) * _flat.size.x
+		var y := (0.5 - uv.y) * _flat.size.y
+		var local := Vector3(x, y, 0)
+		if screen_curve > 0.0:
+			var radius := _curve_radius()
+			local = Vector3(sin(x / radius) * radius, y, (1.0 - cos(x / radius)) * radius)
+		endpoint = panel.to_global(local)
+	elif hit:
+		# Intersect the immersive sphere to place the endpoint on the displayed picture.
+		var start := panel.to_local(origin)
+		var delta := panel.global_basis.inverse() * ray
+		var b := start.dot(delta)
+		var discriminant := b * b - (start.length_squared() - SPHERE_RADIUS * SPHERE_RADIUS)
+		if discriminant >= 0.0:
+			var distance := -b + sqrt(discriminant)
+			if distance > 0.0: endpoint = origin + ray * distance
+	_inspect_pointer_material.albedo_color = Color(0.15, 0.9, 1.0) if hand == "left_hand" else Color(1.0, 0.65, 0.15)
+	var mesh: ImmediateMesh = _inspect_line.mesh
+	mesh.clear_surfaces()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	mesh.surface_add_vertex(to_local(origin))
+	mesh.surface_add_vertex(to_local(endpoint))
+	mesh.surface_end()
+	_inspect_line.visible = true
+	_inspect_dot.visible = hit
+	if hit:
+		_inspect_dot.global_position = endpoint
+		var distance := view_camera.global_position.distance_to(endpoint) if view_camera else origin.distance_to(endpoint)
+		_inspect_dot.scale = Vector3.ONE * clampf(distance / 2.0, 0.3, 12.0)
+	return hit
 
 func _inspect_uv(origin: Vector3, direction: Vector3) -> Vector2:
 	if screen_curve <= 0.0:
@@ -650,14 +812,63 @@ func pan_content(step: Vector2) -> void:
 	crop_center += Vector2(step.x, -step.y) / magnification
 	_update_inspect()
 
+## Derivative of the viewer's projected position (x/depth, -y/depth).
+## The camera's focal length cancels when comparing the picture and detail window.
+static func _projected_tangent(point: Vector3, tangent: Vector3) -> Vector2:
+	var depth := maxf(0.01, -point.z)
+	return Vector2(tangent.x + point.x * tangent.z / depth, -tangent.y - point.y * tangent.z / depth) / depth
+
+## At 1x, a source detail has the same apparent size in the window and original.
+## Use actual mesh dimensions, position and tangent, rather than a fraction of the file.
+func _flat_crop_mapping(at: Vector2) -> Vector4:
+	var eye := view_camera.global_transform if view_camera else Transform3D(Basis.IDENTITY, Vector3(0, 1.6, 0))
+	var view := eye.affine_inverse()
+	var x := (at.x - 0.5) * _flat.size.x
+	var local := Vector3(x, (0.5 - at.y) * _flat.size.y, 0)
+	var tangent_u := Vector3(_flat.size.x, 0, 0)
+	if screen_curve > 0.0:
+		var radius := _curve_radius()
+		var angle := x / radius
+		local.x = sin(angle) * radius; local.z = (1.0 - cos(angle)) * radius
+		tangent_u = Vector3(cos(angle), 0, sin(angle)) * _flat.size.x
+	var source := view * (panel.global_transform * local)
+	var source_u := _projected_tangent(source, view.basis * panel.global_basis * tangent_u)
+	var source_v := _projected_tangent(source, view.basis * panel.global_basis * Vector3(0, -_flat.size.y, 0))
+	var window := view * _detail.global_position
+	var size: Vector2 = _detail.mesh.size
+	var window_u := _projected_tangent(window, view.basis * _detail.global_basis * Vector3(size.x, 0, 0))
+	var window_v := _projected_tangent(window, view.basis * _detail.global_basis * Vector3(0, -size.y, 0))
+	var determinant := source_u.x * source_v.y - source_v.x * source_u.y
+	if absf(determinant) < 0.00000001 or source.z >= -0.01 or window.z >= -0.01:
+		var ratio := maxf(0.01, absf(source.z)) / maxf(0.01, absf(window.z))
+		return Vector4(size.x * ratio / _flat.size.x, 0, 0, size.y * ratio / _flat.size.y)
+	var u := Vector2(window_u.x * source_v.y - source_v.x * window_u.y, source_u.x * window_u.y - window_u.x * source_u.y) / determinant
+	var v := Vector2(window_v.x * source_v.y - source_v.x * window_v.y, source_u.x * window_v.y - window_v.x * source_u.y) / determinant
+	return Vector4(u.x, v.x, u.y, v.y)
+
 func _update_inspect() -> void:
-	var half := 0.5 / magnification
-	crop_center = crop_center.clamp(Vector2(half, half), Vector2(1.0 - half, 1.0 - half))
-	material.set_shader_parameter("crop_center", crop_center if inspect else Vector2(0.5, 0.5))
-	material.set_shader_parameter("content_zoom", magnification if inspect and geometry == 0 else 1.0)
-	_detail.visible = inspect and geometry != 0 and panel.visible
+	var mapping := Vector4(1, 0, 0, 1)
+	if inspect and geometry == Geometry.Geometry.FLAT:
+		# Recompute at the clamped centre too, since a curved picture changes its tangent.
+		for _step in 2:
+			mapping = _flat_crop_mapping(crop_center)
+			var half := Vector2(absf(mapping.x) + absf(mapping.y), absf(mapping.z) + absf(mapping.w)) * (0.5 / magnification)
+			# A tiny/distant picture may fit entirely inside the window at the true scale.
+			# Centre it with outside margins; never enlarge it just to fill the window.
+			half = half.min(Vector2(0.5, 0.5))
+			crop_center = crop_center.clamp(half, Vector2.ONE - half)
+	else:
+		var half := Vector2.ONE * (0.5 / magnification)
+		crop_center = crop_center.clamp(half, Vector2.ONE - half)
+	material.set_shader_parameter("crop_center", Vector2(0.5, 0.5))
+	material.set_shader_parameter("content_zoom", 1.0)
+	_detail.visible = inspect and panel.visible
+	if not _detail.visible: hide_inspect_pointer()
 	_detail_zoom.text = "%.1f×" % magnification
-	_detail_material.set_shader_parameter("detail_projection", true)
+	_detail_material.set_shader_parameter("detail_projection", geometry != Geometry.Geometry.FLAT)
+	_detail_material.set_shader_parameter("crop_center", crop_center)
+	_detail_material.set_shader_parameter("crop_aspect", Vector2(mapping.x, mapping.w))
+	_detail_material.set_shader_parameter("crop_skew", Vector2(mapping.y, mapping.z))
 	_detail_material.set_shader_parameter("content_zoom", magnification)
 	var forward := _detail_direction.normalized()
 	var right := forward.cross(Vector3.UP).normalized()
@@ -668,6 +879,7 @@ func _update_inspect() -> void:
 
 func set_depth(enabled: bool) -> bool:
 	if enabled and (stereo_sbs or geometry != 0 or not platform or _display_request <= 0): return false
+	if enabled != depth_requested: _unlock_mode()
 	auto_depth = enabled
 	depth_requested = enabled
 	depth_enabled = enabled and _depth_texture != null and (not Methods.supports(platform, "prepare_photo_3d") or _stereo_texture != null)
@@ -697,7 +909,7 @@ static func _cache_depth(data: Dictionary) -> Dictionary:
 func _queue_depth_payload(id: int, payload: String, background: bool) -> bool:
 	var info: Variant = JSON.parse_string(payload)
 	if not info is Dictionary or not info.has("stereo_path"): return false
-	# At most one queued result per source; PNG decoding and mip generation run off the frame thread.
+	# At most one queued result per source; pair loading and mip generation run off the frame thread.
 	_depth_queue = _depth_queue.filter(func(job): return int(job.id) != id)
 	_depth_queue.append({"id":id, "payload":payload, "background":background, "serial":_serial})
 	return true
@@ -714,7 +926,7 @@ func _process_depth_jobs() -> void:
 	while not _depth_queue.is_empty():
 		var job: Dictionary = _depth_queue.pop_front()
 		if bool(job.background):
-			if int(job.id) != _prefetch_depth_request: continue
+			if int(job.id) not in [_prefetch_depth_request, _promoted_depth_request]: continue
 		elif int(job.serial) != _serial or int(job.id) not in [_request, _display_request]: continue
 		_depth_job = job
 		_depth_thread = Thread.new()
@@ -723,10 +935,13 @@ func _process_depth_jobs() -> void:
 		break
 
 func _finish_depth(id: int, data: Dictionary, background: bool) -> void:
-	if not background and id != _display_request and id != int(_pending_display.get("job", {}).get("id", 0)): return
+	if background and id == _promoted_depth_request and id != 0: background = false
+	if not background and id not in [_request, _display_request]: return
+	if not background and id == _promoted_depth_request: _promoted_depth_request = 0
 	if not background and data.has("strength") and not is_equal_approx(float(data.strength), depth_strength):
 		_depth_busy = _prepare_depth(id)
 		return
+	if not background and data.has("strength"): _depth_rebuild_seconds = 0.0
 	if background:
 	# A cancelled background error must not fail a foreground retry of the same file ID.
 		if id != _prefetch_depth_request or id == 0: return
@@ -736,6 +951,10 @@ func _finish_depth(id: int, data: Dictionary, background: bool) -> void:
 			if data.is_empty(): _prefetched[target]["depth_failed"] = true
 			else: _prefetched[target]["depth_data"] = _cache_depth(data)
 			return
+		return
+	if id == _request and loading and _pending_display.is_empty():
+		# The joined conversion can finish before the colour decoder. Keep its matching result.
+		_incoming_depth_result = {"id": id, "data": data}
 		return
 	if not _pending_display.is_empty() and int(_pending_display.job.id) == id and int(_pending_display.serial) == _serial:
 		if data.is_empty(): _fail_pending_depth(); return
@@ -772,7 +991,7 @@ static func _read_depth(payload: String) -> Dictionary:
 	var bytes := FileAccess.get_file_as_bytes(str(result.path))
 	if bytes.size() != w * h * 4: return {}
 	var depth := Image.create_from_data(w, h, false, Image.FORMAT_RF, bytes)
-	var data := {"image": depth, "rect": Vector4(rect[0], rect[1], rect[2], rect[3])}
+	var data := {"image": depth, "rect": Vector4(rect[0], rect[1], rect[2], rect[3]), "cache_bytes":int(result.get("cache_bytes", 0))}
 	if result.has("stereo_path"):
 		if not (result.get("stereo_strength") is float or result.get("stereo_strength") is int): return {}
 		var strength := float(result.get("stereo_strength", -1))
@@ -780,9 +999,15 @@ static func _read_depth(payload: String) -> Dictionary:
 		if result.get("stereo_strategy", "") != "video_soft_shift_gpu" or not is_finite(strength) or strength < 0 or strength > 2 \
 			or sw < 2 or sw % 2 != 0 or sw > 8192 or sh < 1 or sh > 4096 or sw * sh > 16 * 1024 * 1024: return {}
 		var stereo := Image.new()
-		var header := Info.read_header(str(result.stereo_path))
-		if header.is_empty() or int(header.width) != sw or int(header.height) != sh: return {}
-		if stereo.load_png_from_buffer(FileAccess.get_file_as_bytes(str(result.stereo_path))) != OK or stereo.get_size() != Vector2i(sw, sh): return {}
+		if str(result.stereo_path).get_extension() == "rgba":
+			# Raw RGBA rows straight from the GPU pair: no PNG encode on Android, no decode here.
+			var pixels := FileAccess.get_file_as_bytes(str(result.stereo_path))
+			if pixels.size() != sw * sh * 4: return {}
+			stereo = Image.create_from_data(sw, sh, false, Image.FORMAT_RGBA8, pixels)
+		else:
+			var header := Info.read_header(str(result.stereo_path))
+			if header.is_empty() or int(header.width) != sw or int(header.height) != sh: return {}
+			if stereo.load_png_from_buffer(FileAccess.get_file_as_bytes(str(result.stereo_path))) != OK or stereo.get_size() != Vector2i(sw, sh): return {}
 		stereo.generate_mipmaps()
 		data.merge({"stereo_image":stereo, "strength":strength, "strategy":str(result.stereo_strategy)})
 	return data
@@ -795,6 +1020,8 @@ func set_depth_strength(value: float) -> bool:
 	if strength <= 0.0: return set_depth(false)
 	if stereo_sbs or geometry != 0 or not platform or _display_request <= 0: return false
 	depth_strength = strength
+	if Methods.supports(platform, "update_photo_3d_strength"):
+		platform.update_photo_3d_strength(depth_strength)
 	if not depth_requested: return set_depth(true)
 	# Reuse the same depth map; no decoding, model call or mesh rebuild during a drag.
 	material.set_shader_parameter("depth_strength", depth_strength)
@@ -811,7 +1038,9 @@ func snapshot() -> Dictionary:
 		"can_previous": queue.size() > 1 and (geometry == Geometry.Geometry.FLAT or position > 0),
 		"can_next": queue.size() > 1 and (geometry == Geometry.Geometry.FLAT or (position >= 0 and position < queue.size() - 1)),
 		"geometry": geometry, "stereo": stereo_sbs, "top_bottom": top_bottom, "swap_eyes": swap_eyes, "fisheye_fov": fisheye_fov, "mode_lock": mode_lock.duplicate(),
-		"inspect": inspect, "zoom": magnification, "depth_requested": depth_requested, "depth_enabled": depth_enabled,
+		"inspect": inspect, "zoom": magnification, "inspect_magnification": inspect_magnification,
+		"screen_distance": screen_distance, "screen_scale": screen_scale,
+		"depth_requested": depth_requested, "depth_enabled": depth_enabled,
 		"depth_available": platform != null, "depth_strength": depth_strength, "depth_error": depth_error,
 		"stereo_strategy":_display_depth_data.get("strategy", "inverse_shader"), "stereo_ready":_stereo_texture != null,
 		"render_strength":_display_depth_data.get("strength", depth_strength),
@@ -824,19 +1053,52 @@ func can_background() -> bool:
 func background_source() -> Dictionary:
 	return {"path": _metadata.get("path", ""), "orientation": _metadata.get("orientation", 1)} if can_background() else {}
 
+## Cancel queued/preloaded files from a removed volume while keeping an unrelated displayed photo.
+func release_storage(volume: Dictionary) -> bool:
+	var volumes := preload("res://scripts/storage_volume.gd")
+	if not volumes.contains_uri(volume, local_uri) and not queue.any(func(item): return volumes.contains_uri(volume, str(item.get("uri", "")))):
+		return false
+	var remaining: Array[Dictionary] = []
+	for item in queue:
+		if not volumes.contains_uri(volume, str(item.get("uri", ""))): remaining.append(item)
+	if volumes.contains_uri(volume, local_uri) or local_uri.is_empty():
+		close_image()
+		queue = remaining
+		return true
+	finish_transition()
+	_cache_epoch += 1; _serial += 1
+	_pause_prefetch()
+	for target in _prefetched.keys(): _drop_prefetch(target)
+	for entry in _recent_files.values(): _release_photo(int(entry.id), true)
+	_recent_files.clear(); _prefetch_failed.clear()
+	_prefetch_decode = {}; _next_decode = {}; _pending_display = {}
+	_promoted_depth_request = 0; _incoming_depth_result = {}
+	_depth_queue.assign(_depth_queue.filter(func(job): return int(job.id) == _display_request))
+	if _request > 0 and _request != _display_request: _release_photo(_request, true)
+	_request = _display_request; pending_index = -1; loading = false
+	queue = remaining; index = -1
+	for target in queue.size():
+		if str(queue[target].uri) == local_uri: index = target; break
+	changed.emit()
+	return false
+
 func close_image(notify: bool = true) -> void:
 	finish_transition()
 	_cache_epoch += 1
 	_pause_prefetch()
 	for target in _prefetched.keys(): _drop_prefetch(target)
+	for entry in _recent_files.values(): _release_photo(int(entry.id), true)
+	_recent_files.clear()
 	_prefetch_decode = {}; _prefetch_request = 0; _prefetch_failed.clear()
 	_display_info = {}; _display_result = {}
 	_pending_display = {}; _display_depth_data = {}
+	_promoted_depth_request = 0; _incoming_depth_result = {}
 	_depth_queue.clear(); _depth_rebuild_seconds = 0.0
 	_serial += 1
 	if platform:
 		if _request > 0: _release_photo(_request, true)
 		if _display_request > 0: _release_photo(_display_request)
+		if Methods.supports(platform, "release_photo_depth_runtime"): platform.release_photo_depth_runtime()
 	_request = 0; _display_request = 0; _next_decode = {}
 	_texture = null; _depth_texture = null; _stereo_texture = null; _depth_busy = false; depth_requested = false; depth_enabled = false
 	material.set_shader_parameter("photo_texture", null); material.set_shader_parameter("depth_texture", null)
@@ -845,6 +1107,7 @@ func close_image(notify: bool = true) -> void:
 	for target in [material, _detail_material]:
 		target.set_shader_parameter("stereo_texture", null); target.set_shader_parameter("photo_stereo", false)
 	panel.visible = false; _detail.visible = false; loading = false; inspect = false
+	hide_inspect_pointer()
 	local_uri = ""; display_name = ""; error = ""; index = -1; pending_index = -1
 	if notify: changed.emit()
 

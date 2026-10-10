@@ -25,6 +25,8 @@ func _run() -> void:
 		"Quality and sharpness each occupy one field with all their choices")
 	main._on_setting_changed("display_quality",2)
 	main._on_setting_changed("sharpness",0.4)
+	check(not bool(ProjectSettings.get_setting("xr/openxr/extensions/meta/dynamic_resolution", true)), "Runtime cannot silently lower chosen video/menu render quality")
+	check(main.display.capabilities().meta_dynamic_resolution_enabled == false and main.display.capabilities().render_target_size_scope == "allocated_eye_buffer", "Diagnostics distinguish allocated buffers from dynamic render regions")
 	check(main.display.render_scale == 1.1, "Quality keeps current XR targets until restart")
 	check(main._library_settings().display_quality_pending, "Pending quality is visible")
 	check(main.video.sharpness == 0.4 and main.photo.sharpness == 0.4, "Sharpness applies to both media types")

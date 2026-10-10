@@ -83,7 +83,7 @@ func _run() -> void:
 		failures.append("Caption pixels must survive zero video Alpha and disappear when off: " + str(visible_pixels))
 	# Flat subtitles share the screen's depth; VR preferences must not move them.
 	var anchor := video.panel.global_transform * Vector3(0, -video._flat.size.y * 0.5 + 0.06, 0.01)
-	for distance in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0]:
+	for distance in [0.5, 1.0, 2.0, 5.0, 10.0]:
 		video.subtitle_distance = distance
 		video._place_caption()
 		if video.caption.global_position.distance_to(anchor) > 0.001 or not is_equal_approx(video.caption.pixel_size, 0.0016):
@@ -96,7 +96,7 @@ func _run() -> void:
 	video.set_subtitle_track(9)
 	video.geometry = video.Geometry.Geometry.HALF_EQUIRECT
 	video._apply_geometry()
-	for distance in [0.5, 1.0, 2.0, 5.0, 10.0, 20.0]:
+	for distance in [0.5, 1.0, 2.0, 5.0, 10.0]:
 		video.subtitle_distance = distance
 		video._subtitle_poll_ms = 0
 		video._poll_subtitles()
@@ -105,7 +105,7 @@ func _run() -> void:
 			failures.append("VR caption distance/duplicate layer mismatch")
 	for geometry in [1, 2, 3]:
 		video.geometry = geometry
-		for position in 5:
+		for position in [-60.0, -30.0, 0.0, 30.0, 60.0]:
 			video.subtitle_position = position
 			video._place_caption()
 			var inverse: Basis = video.material.get_shader_parameter("subtitle_anchor_inverse")

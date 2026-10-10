@@ -74,10 +74,12 @@ internal class MpvVideoBridge(
         @Volatile var sidecars: List<ParcelFileDescriptor> = emptyList()
         @Volatile var networkLease: String? = null
         @Volatile var subtitleLeases: List<String> = emptyList()
+        @Volatile var audioLeases: List<String> = emptyList()
         /** Only once MPV no longer reads them. */
         fun closeDescriptors() {
             networkLease?.let(releaseNetwork); networkLease = null
             subtitleLeases.forEach(releaseNetwork); subtitleLeases = emptyList()
+            audioLeases.forEach(releaseNetwork); audioLeases = emptyList()
             descriptor?.close(); descriptor = null
             sidecars.forEach { runCatching { it.close() } }; sidecars = emptyList()
         }
@@ -175,7 +177,7 @@ internal class MpvVideoBridge(
                 val source = Uri.parse(uri)
                 val path = if (source.scheme == "file") source.path ?: error("Local file path unavailable")
                 else if (source.scheme in setOf("smb", "cloud", "medialib", "http", "https")) resolveNetwork(uri).also {
-                    if (source.scheme == "medialib") host.networkLease = it
+                    if (source.scheme in setOf("medialib", "cloud", "smb")) host.networkLease = it
                 } else {
                     val fd = app.contentResolver.openFileDescriptor(source, "r") ?: error("Local document descriptor unavailable")
                     host.descriptor = fd
@@ -186,6 +188,7 @@ internal class MpvVideoBridge(
                 val extra = if (audio) sidecarAudio(uri) else emptyList()
                 host.markStartup("audio_sidecars_resolved_ms")
                 host.sidecars = extra.mapNotNull { it.descriptor }
+                host.audioLeases = extra.filter { it.location.startsWith("http://127.0.0.1:") }.map { it.location }
                 val captions = sidecarSubtitles(uri)
                 host.markStartup("subtitle_sidecars_resolved_ms")
                 host.subtitleLeases = captions.map { it.location }

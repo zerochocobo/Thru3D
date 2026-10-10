@@ -82,3 +82,7 @@ Distribution filenames identify platforms as `QUEST`, `PICO` and `OpenXR`, retai
 The historical full conversion/diagnostic path remains available without `-UsePreparedModelAssets`, but requires upstream/reference models, the pinned project student, converter tools and generated numerical oracles. It is not the minimal build path and does not fetch the missing student automatically.
 
 Model conversion additionally uses ONNX Runtime, NumPy, ONNX simplification, Pillow/OpenCV and the matching MNN converter/Python bindings; distillation uses PyTorch and onnx2torch. These tools belong in separate local environments. The small model-tools requirements lock covers reference conversion packages, not every optional training/analysis tool.
+
+## OpenList Android core
+
+Build-Player invokes tools/environment/Prepare-OpenList.ps1. It downloads checksum-pinned OpenList and Go archives, applies the recorded encrypted Storage.Addition tag, and binds the local cloud/openlist adapter as an arm64 AAR using the fixed gomobile revision and 16KiB linker alignment. The generated AAR is exported alongside the Kotlin plugin. Only its private JNI management API and loopback media router are enabled. Test-CloudCore.ps1 uses a local synthetic WebDAV server to check encryption, original-file ranges and fresh-process persistence without personal accounts.

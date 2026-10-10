@@ -163,6 +163,8 @@ struct Source final {
     int desired_audio_id = -1; double desired_volume = 100; bool desired_mute = false, audio_dirty = false;
     uint64_t snapshot_sequence = 0; // control thread only
     std::string state = "opening", details = "{}", error, render_error;
+    double pixel_aspect = 1.0; // status_mutex; output coordinates remain packed source pixels
+    std::string stereo_mode; // status_mutex; MPV's demuxed stereo-in, never inferred from title
     std::thread control_thread, render_thread;
 
     Source(std::string file, bool hw, bool with_audio, int position,
@@ -275,6 +277,11 @@ struct Source final {
         require(width > 0 && height > 0 && width <= 8192 && height <= 8192 && width*height <= 8192LL*4320,
                 "MPV source dimensions exceed the current GPU slot contract");
         const uint64_t size = (static_cast<uint64_t>(width) << 32) | static_cast<uint32_t>(height);
+        double par = 1.0;
+        if (mpv_get_property(core, "video-out-params/par", MPV_FORMAT_DOUBLE, &par) < 0 ||
+            !std::isfinite(par) || par <= 0.0 || par > 16.0) par = 1.0;
+        const auto stereo = property(core, "video-out-params/stereo-in");
+        { std::lock_guard<std::mutex> lock(status_mutex); pixel_aspect = par; stereo_mode = stereo; }
         const auto previous = dimensions.load();
         require(previous == 0 || previous == size, "MPV midstream size change requires a new format generation");
         dimensions.store(size); wake.notify_one();
@@ -287,6 +294,9 @@ struct Source final {
             auto option = [&](const char* key, const char* value) { checked(mpv_set_option_string(core, key, value), key); };
             option("config", "no"); option("load-scripts", "no"); option("terminal", "no");
             option("vo", "libmpv"); option("hwdec", hardware ? "mediacodec" : "no"); option("hwdec-codecs", "all");
+            // Godot restores the per-eye display aspect. MPV must fill the packed FBO;
+            // letterboxing here would change the eye rectangles before the VR shader splits them.
+            option("keepaspect", "no");
             option("audio", audio ? "auto" : "no"); option("pause", "yes"); option("idle", "yes"); option("keep-open", "yes");
             // Initial/continued playback must use the same policy as subsequent seeks.
             // Explicit seek flags below still allow an independent bookmark override.
@@ -740,6 +750,8 @@ struct Source final {
 #endif
         last_acquired_id = newest->ticket.frame_id; last_acquired_epoch = newest->ticket.source_epoch;
         const auto& t = newest->ticket;
+        double par; std::string stereo;
+        { std::lock_guard<std::mutex> lock(status_mutex); par = pixel_aspect; stereo = stereo_mode; }
         return "{\"producer_token\":" + std::to_string(newest->token) + ",\"color_texture_id\":" + std::to_string(newest->color) +
             ",\"frame_id\":" + std::to_string(t.frame_id) + ",\"pts_us\":" + std::to_string(t.media_pts_us) +
             ",\"source_epoch\":" + std::to_string(t.source_epoch) + ",\"render_sequence\":" + std::to_string(t.render_sequence) +
@@ -747,6 +759,7 @@ struct Source final {
             ",\"width\":" + std::to_string(newest->image ? t.width : newest->out_width) +
             ",\"height\":" + std::to_string(newest->image ? t.height : newest->out_height) +
             ",\"source_width\":" + std::to_string(t.width) + ",\"source_height\":" + std::to_string(t.height) +
+            ",\"pixel_aspect\":" + std::to_string(par) + ",\"stereo_mode\":" + quote(stereo) +
             ",\"source_crop\":[" + std::to_string(t.crop_x0) + "," + std::to_string(t.crop_y0) + "," + std::to_string(t.crop_x1) + "," + std::to_string(t.crop_y1) +
             "],\"rotation_degrees\":" + std::to_string(t.rotation_degrees) +
             ",\"color_target\":\"" + std::string(newest->image ? "AHardwareBuffer" : "GL_TEXTURE_2D") +

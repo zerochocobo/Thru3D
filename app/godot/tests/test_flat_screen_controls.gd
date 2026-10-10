@@ -34,6 +34,18 @@ func _run() -> void:
 	main.player_menu = menu
 	main.recent_menu = Node3D.new()
 	main.recent_menu.visible = false
+	# Verify the visible per-eye aspect, including anamorphic PAR without double correction.
+	for case in [[1920, 1080, 1.0, 1, 8.0/9.0], [1920, 1080, 1.0, 2, 32.0/9.0],
+		[1920, 1080, 1.0, 3, 16.0/9.0], [1920, 1080, 1.0, 4, 16.0/9.0],
+		[1920, 1080, 2.0, 1, 16.0/9.0], [1920, 1080, 2.0, 3, 16.0/9.0],
+		[1920, 1080, 0.5, 2, 16.0/9.0], [1920, 1080, 0.5, 4, 16.0/9.0],
+		[3840, 1080, 1.0, 1, 16.0/9.0], [1920, 2160, 1.0, 2, 16.0/9.0]]:
+		video.media.format = {"width": case[0], "height": case[1], "pixel_aspect": case[2]}
+		video.set_stereo_layout(case[3])
+		video._apply_geometry()
+		check(is_equal_approx(video._flat.size.x / video._flat.size.y, case[4]), "Flat visible aspect " + str(case))
+	video.stereo_half = false
+	video.media.format = {"width": 1920, "height": 1080}
 	var eye := Vector3(0, 1.6, 0)
 	for mode in ["2d", "sbs", "tb", "depth", "warped_depth"]:
 		video.stereo_sbs = mode in ["sbs", "tb"]

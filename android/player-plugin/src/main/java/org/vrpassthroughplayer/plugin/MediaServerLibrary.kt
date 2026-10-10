@@ -44,11 +44,16 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
     private val nextId: () -> Int,
     private val accounts: () -> List<MediaServerAccount> = {
         MediaServerStore.accounts(context() ?: throw MediaServerFailure("Server unavailable"))
+    }, private val getAccount: (String) -> MediaServerAccount = { id ->
+        MediaServerStore.get(context() ?: throw MediaServerFailure("Server unavailable"), id)
     }, private val emit: (Int, String) -> Unit) {
     private val pool = ThreadPoolExecutor(3, 3, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue(24), { Thread(it, "QuestMediaServer") })
     private class Job(val server: String) { @Volatile var http: MediaServerHttp? = null; @Volatile var future: FutureTask<Unit>? = null }
     private val jobs = ConcurrentHashMap<Int, Job>()
     private val leases = ConcurrentHashMap<String, Pair<String, LocalStreamServer>>()
+    private data class Playback(val account: MediaServerAccount, val scene: String,
+        val stream: MediaStreamLink, val videoUrl: String)
+    private val playback = ConcurrentHashMap<String, Playback>()
     @Volatile private var closed = false
     init { instances.add(this) }
     fun request(raw: String): Int {
@@ -57,7 +62,10 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
         val id = nextId(); val job = Job(if (req.optString("action") == "remove") "" else req.optString("server_id")); jobs[id] = job
         val task = FutureTask<Unit> {
             val result = try {
-                val payload = if (req.optString("action") == "servers") JSONObject().put("servers", JSONArray().apply { accounts().forEach { put(it.json()) } })
+                val payload = if (req.optString("action") == "servers") JSONObject().put("servers", JSONArray().apply { accounts().forEach { account ->
+                    val capabilities = MediaServerHttp(account).use { http -> mediaClient(account, http).capabilities() }
+                    put(account.json().put("capabilities", capabilities))
+                } })
                 else if (req.optString("action") == "remove") {
                     val app = context() ?: throw MediaServerFailure("Server unavailable")
                     MediaServerStore.remove(app, req.getString("server_id"))
@@ -70,6 +78,8 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
                         mediaRequire(jobs[id] === job && !closed, "Request cancelled")
                         val client = mediaClient(account, http)
                         when (req.optString("action")) {
+                            "home" -> client.home(req)
+                            "favorite" -> client.favorite(req)
                             "browse" -> client.browse(req)
                             "candidates" -> client.candidates(req)
                             "detail" -> JSONObject().put("detail", client.detail(req.getString("scene_id")))
@@ -131,21 +141,71 @@ internal class MediaServerLibrary(private val context: () -> Context?, private v
     }
     fun playable(uri: String): String {
         val (server, scene) = MediaLibraryUri.parse(uri)
-        val app = context() ?: throw MediaServerFailure("Server unavailable")
-        val account = MediaServerStore.get(app, server)
+        val account = getAccount(server)
         val source = HttpRangeStreamSource(account) { http ->
             mediaClient(account, http).stream(scene)
         }
         try {
             synchronized(MediaServerStore) {
-                mediaRequire(!closed && MediaServerStore.get(app, server) == account, "Server changed")
-                val url = streams().publish(source, "video")
-                leases[url] = server to streams()
+                mediaRequire(!closed && getAccount(server) == account, "Server changed")
+                val local = streams()
+                val url = local.publish(source, "video")
+                leases[url] = server to local
+                playback[uri] = Playback(account, scene, source.original(), url)
                 return url
             }
         } catch (e: Exception) { source.close(); throw e }
     }
-    fun release(uri: String) { leases.remove(uri)?.second?.revoke(uri) }
+    fun sidecarAudio(uri: String): List<SidecarAudio.Track> {
+        val selected = playback[uri] ?: return emptyList()
+        fun current() = mediaRequire(!closed && playback[uri] === selected &&
+            getAccount(selected.account.id) == selected.account, "Server changed")
+        synchronized(MediaServerStore) { current() }
+        return MediaServerHttp(selected.account).use { http ->
+            mediaClient(selected.account, http).audio(selected.scene, selected.stream).take(4).mapNotNull { audio ->
+                runCatching {
+                    var initial = true
+                    val source = HttpRangeStreamSource(selected.account) { refresh ->
+                        val fresh = if (initial) { initial = false; audio } else
+                            mediaClient(selected.account, refresh).audio(selected.scene, selected.stream)
+                                .firstOrNull { it.identity == audio.identity } ?: throw MediaServerFailure("Audio changed; reopen it")
+                        MediaStreamLink(fresh.url, fresh.identity)
+                    }
+                    try {
+                        synchronized(MediaServerStore) {
+                            current()
+                            val local = streams()
+                            val url = local.publish(source, "audio.m4a")
+                            leases[url] = selected.account.id to local
+                            SidecarAudio.Track(url, audio.title)
+                        }
+                    } catch (error: Exception) { source.close(); throw error }
+                }.getOrNull()
+            }
+        }
+    }
+    fun sidecarSubtitles(uri: String): List<SidecarSubtitles.Track> {
+        val selected = playback[uri] ?: return emptyList()
+        fun current() = mediaRequire(!closed && playback[uri] === selected &&
+            getAccount(selected.account.id) == selected.account, "Server changed")
+        synchronized(MediaServerStore) { current() }
+        return MediaServerHttp(selected.account).use { http ->
+            val captions = mediaClient(selected.account, http).subtitles(selected.scene, selected.stream)
+            SidecarSubtitles.forServer(http, captions) { source, name ->
+                synchronized(MediaServerStore) {
+                    current()
+                    val local = streams()
+                    val url = local.publish(source, name)
+                    leases[url] = selected.account.id to local
+                    url
+                }
+            }
+        }
+    }
+    fun release(uri: String) {
+        leases.remove(uri)?.second?.revoke(uri)
+        playback.entries.filter { it.value.videoUrl == uri }.forEach { playback.remove(it.key, it.value) }
+    }
     fun close() { closed = true; jobs.keys.toList().forEach(::cancel); pool.shutdownNow(); instances.remove(this)
         leases.keys.toList().forEach(::release) }
     companion object {

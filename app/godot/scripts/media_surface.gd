@@ -1,5 +1,8 @@
 extends Node3D
 ## Shared spatial surface only: decoding, playback clocks and photo queues live in their owners.
+signal mode_lock_changed(lock: Dictionary)
+
+var mode_lock := {} # Default for unmarked, unremembered media; manual mode changes unlock it.
 const Geometry := preload("res://scripts/video_geometry.gd")
 var panel: MeshInstance3D
 var material: ShaderMaterial
@@ -11,6 +14,7 @@ var view_camera: Camera3D
 var geometry := Geometry.Geometry.FLAT
 var stereo_sbs := false
 var top_bottom := false
+var stereo_half := false
 const FISHEYE_FOVS := [180, 190, 200, 220]
 var fisheye_fov := 180
 var swap_eyes := false
@@ -41,6 +45,8 @@ var view_yaw := 0.0
 var view_pitch := 0.0
 var view_zoom := 0.0
 const ZOOM_LIMITS := Vector2(-0.5, 0.6)
+var _view_basis := Basis.IDENTITY # World orientation captured once, independent of later head turns.
+var _applied_geometry := Geometry.Geometry.FLAT
 
 func initialize_surface(shader: Shader) -> void:
 	panel = MeshInstance3D.new()
@@ -57,12 +63,22 @@ func initialize_surface(shader: Shader) -> void:
 func _source_size() -> Vector2:
 	return Vector2(1920, 1080)
 
+func _pixel_aspect() -> float:
+	return 1.0
+
 func _apply_geometry() -> void:
+	if geometry != _applied_geometry:
+		_applied_geometry = geometry
+		if geometry != Geometry.Geometry.FLAT:
+			reset_view()
 	if geometry == Geometry.Geometry.FLAT:
 		panel.transform = flat_pose
 		var dimensions := _source_size()
 		var aspect := dimensions.x / maxf(1.0, dimensions.y) \
 			/ (2.0 if stereo_sbs and not top_bottom else 1.0) * (2.0 if stereo_sbs and top_bottom else 1.0)
+		# Half layouts restore the packed axis explicitly; container PAR may already describe
+		# that same stretch, so applying both would double it.
+		aspect *= (0.5 if top_bottom else 2.0) if stereo_sbs and stereo_half else _pixel_aspect()
 		if aspect > 0:
 			_screen_base = _screen_dimensions(aspect)
 			_flat.size = _screen_base * screen_scale
@@ -82,6 +98,7 @@ func _apply_geometry() -> void:
 	# A 2D->3D stereo pair from the bridge is side by side; otherwise the shader adds the parallax.
 	material.set_shader_parameter("stereo_sbs", stereo_sbs)
 	material.set_shader_parameter("top_bottom", stereo_sbs and top_bottom)
+	material.set_shader_parameter("stereo_half", stereo_sbs and stereo_half)
 	material.set_shader_parameter("fisheye_fov", float(fisheye_fov))
 	material.set_shader_parameter("swap_eyes", swap_eyes)
 
@@ -91,7 +108,7 @@ func _screen_dimensions(aspect: float) -> Vector2:
 ## Immersive projections are centred on the eyes every frame. Runs on every presented video frame
 ## too, so it must never put the sphere anywhere else (that alternated with _process and shook the view).
 func _center_on_view() -> void:
-	panel.basis = Basis(Vector3.UP, view_yaw) * Basis(Vector3.RIGHT, view_pitch)
+	panel.global_basis = _view_basis * Basis(Vector3.UP, view_yaw) * Basis(Vector3.RIGHT, view_pitch)
 	if view_camera and view_camera.is_inside_tree():
 		panel.global_position = view_camera.global_position
 	else:
@@ -258,9 +275,21 @@ func set_corner_hover(index: int) -> void:
 	if index != hovered_corner:
 		_show_handles(index)
 
+func _unlock_mode() -> void:
+	if mode_lock.is_empty(): return
+	mode_lock = {}
+	mode_lock_changed.emit(mode_lock.duplicate())
+
 func reset_view() -> void:
 	view_yaw = 0.0
 	view_pitch = 0.0
 	view_zoom = 0.0
+	if view_camera and view_camera.is_inside_tree():
+		# Centre on the gaze once, keeping the picture free of head roll.
+		var forward := -view_camera.global_basis.orthonormalized().z
+		var yaw := atan2(-forward.x, -forward.z)
+		_view_basis = Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, asin(clampf(forward.y, -1.0, 1.0)))
+	else:
+		_view_basis = Basis.IDENTITY
 	if geometry != Geometry.Geometry.FLAT:
 		_center_on_view()

@@ -43,3 +43,7 @@ This repository is an application source snapshot. Model weights and compiled th
 When distributing a covered binary, GPL v3 requires corresponding source through an applicable delivery method. A root license file and links to upstream projects are not, by themselves, a complete binary source offer. Supply the relevant preferred forms for modification, required modifications, interfaces, build/install scripts, exact dependency sources and applicable installation information. Keep each binary release associated with its source tag and model/dependency versions.
 
 Vendor SDK terms, the actual combined binary, distribution-channel terms and any GPL exceptions must also be checked before claiming complete binary-distribution compliance. GPL permissions do not grant rights to third-party SDKs or private media. This source publication does not declare the existing store/testing APK fully compliant.
+
+## Embedded OpenList
+
+OpenList v4.2.6 and the JNI adapter are distributed with their AGPL-3.0 obligations. The original project-owned source remains GPL-3.0-only; the combined application must also satisfy AGPL requirements applicable to its OpenList component. GPL v3 section 13 permits combination with AGPL v3. Replacing the frontend does not remove those obligations. Keep the exact upstream revision, modified Storage.Addition serializer, adapter, Go module manifests, dependency notices and build/install scripts with the binary's corresponding source. See third_party/openlist/NOTICE.md and tools/environment/Prepare-OpenList.ps1.

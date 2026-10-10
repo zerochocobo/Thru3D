@@ -80,18 +80,17 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     @UsedByGodot fun activate_photo(id: Int): Boolean = synchronized(PhotoCache.lock) {
         if (closed.get()) return@synchronized false
         if (photos.activate(id)) return@synchronized true
-        val file = photoPreloads.take(id) ?: return@synchronized false
-        if (photos.adopt(id, file)) return@synchronized true
-        file.parentFile?.deleteRecursively()
-        false
+        photoPreloads.promoteTo(id, photos)
     }
     @UsedByGodot fun cancel_photo(id: Int) { photos.cancel(id); photoPreloads.cancel(id) }
     @UsedByGodot fun release_photo(id: Int) { photos.release(id); photoPreloads.release(id) }
     @UsedByGodot fun prepare_photo_depth(id: Int): Boolean = !closed.get() && photos.depth(id)
-    @UsedByGodot fun prepare_preloaded_photo_depth(id: Int): Boolean = !closed.get() && photoPreloads.depth(id)
+    @UsedByGodot fun prepare_preloaded_photo_depth(id: Int): Boolean = !closed.get() && (photoPreloads.depth(id) || photos.depth(id,background=true))
     @UsedByGodot fun prepare_photo_3d(id: Int, strength: Double): Boolean = !closed.get() && photos.depth(id,strength.toFloat(),true)
-    @UsedByGodot fun prepare_preloaded_photo_3d(id: Int, strength: Double): Boolean = !closed.get() && photoPreloads.depth(id,strength.toFloat(),true)
-    @UsedByGodot fun cancel_preloaded_photo_depth() { photoPreloads.cancelDepth() }
+    @UsedByGodot fun prepare_preloaded_photo_3d(id: Int, strength: Double): Boolean = !closed.get() && (photoPreloads.depth(id,strength.toFloat(),true) || photos.depth(id,strength.toFloat(),true,true))
+    @UsedByGodot fun cancel_preloaded_photo_depth() { photoPreloads.cancelBackgroundDepth(); photos.cancelBackgroundDepth() }
+    @UsedByGodot fun update_photo_3d_strength(strength: Double) { photos.updateDepthStrength(strength.toFloat()); photoPreloads.updateDepthStrength(strength.toFloat()) }
+    @UsedByGodot fun release_photo_depth_runtime() { photos.cancelDepth(); photoPreloads.cancelDepth(); PhotoDepthRuntime.release() }
     @UsedByGodot fun photo_cache_usage(): String {
         val app = activity?.applicationContext ?: return "{}"
         return runCatching {
@@ -220,8 +219,21 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
         return id
     }
     @UsedByGodot fun media_list_local(): Int = media_local_browse("")
+    @UsedByGodot fun media_local_storage_settings(path: String): Int {
+        if (closed.get()) return -1
+        val id = sources.nextId()
+        runOnHostThread { if (!closed.get()) sources.openLocalEjectSettings(id,path) }
+        return id
+    }
     @UsedByGodot fun media_cloud_browse(path: String, refresh: Boolean): Int = if (closed.get()) -1 else sources.cloudBrowse(path, refresh)
     @UsedByGodot fun media_cloud_page(path: String, offset: Int, refresh: Boolean): Int = if (closed.get()) -1 else sources.cloudBrowse(path, refresh, offset)
+    @UsedByGodot fun media_cloud_sorted_page(path: String, offset: Int, refresh: Boolean, order: String): Int = if (closed.get()) -1 else sources.cloudBrowse(path, refresh, offset, order)
+    @UsedByGodot fun media_file_management_enabled(enabled: Boolean) { if (!closed.get()) sources.setFileManagement(enabled) }
+    @UsedByGodot fun media_file_delete(json: String): Int = if (closed.get()) -1 else sources.deleteFile(json)
+    @UsedByGodot fun media_file_rename_prepare(json: String): Int = if (closed.get()) -1 else sources.renameFile(json, true)
+    @UsedByGodot fun media_file_rename(json: String): Int = if (closed.get()) -1 else sources.renameFile(json, false)
+    @UsedByGodot fun media_file_delete_prepare(json: String): Int = if (closed.get()) -1 else sources.deleteFile(json, prepare = true)
+    @UsedByGodot fun media_file_delete_status(json: String): Int = if (closed.get()) -1 else sources.deleteFile(json, true)
     @UsedByGodot fun media_cloud_cancel(id: Int) { if (!closed.get()) sources.cloudCancel(id) }
     @UsedByGodot fun account_open(kind: String, provider: String, id: String, json: String): Int = if (closed.get()) -1 else accounts.open(kind, provider, id, json)
     @UsedByGodot fun account_list(kind: String): String = if (closed.get()) "null" else accounts.accounts(kind)
@@ -238,6 +250,9 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     /** Opens the system "All files access" page (folders beyond media ones, files beside videos). */
     @UsedByGodot fun media_local_grant_all_files() { if (!closed.get()) runOnHostThread { sources.grantAllFiles() } }
     @UsedByGodot fun media_dlna_discover(): Int = if (closed.get()) -1 else sources.dlnaDiscover()
+    @UsedByGodot fun media_dlna_servers(): Int = if (closed.get()) -1 else sources.dlnaServers()
+    @UsedByGodot fun media_dlna_save(json: String): Int = if (closed.get()) -1 else sources.dlnaSave(json)
+    @UsedByGodot fun media_dlna_remove(id: String): Int = if (closed.get()) -1 else sources.dlnaRemove(id)
     @UsedByGodot fun media_dlna_browse(server: String, objectId: String): Int = if (closed.get()) -1 else sources.dlnaBrowse(server, objectId)
     @UsedByGodot fun media_smb_servers(): Int = if (closed.get()) -1 else sources.smbServers()
     @UsedByGodot fun media_smb_discover(): Int = if (closed.get()) -1 else sources.smbDiscover()
@@ -408,11 +423,11 @@ class QuestPlayerPlugin(godot: Godot) : GodotPlugin(godot) {
     // Android can resume before Godot registers the plugin's native signals.
     override fun onGodotSetupCompleted() { signalsReady = true }
     override fun onMainPause() { if (!closed.get()) { accounts.pause(true); media.pause(); controlled.pause(); mpv.pause(); if (signalsReady) emitSignal("android_lifecycle", "pause") } }
-    override fun onMainResume() { if (!closed.get()) { accounts.pause(false); media.resume(); controlled.resume(); mpv.resume(); if (signalsReady) emitSignal("android_lifecycle", "resume") } }
+    override fun onMainResume() { if (!closed.get()) { accounts.pause(false); media.resume(); controlled.resume(); mpv.resume(); if (signalsReady) { sources.refreshLocalStorage(); emitSignal("android_lifecycle", "resume") } } }
     override fun onMainDestroy() { close() }
     override fun onGodotTerminating() { close() }
 
     private fun close() {
-        if (closed.compareAndSet(false, true)) { accounts.close(); photos.close(); photoPreloads.close(); picker.close(); localAccess.close(); probe.shutdownNow(); media.shutdown(); controlled.shutdown(); mpv.shutdown(); rvm.close(); sources.close() }
+        if (closed.compareAndSet(false, true)) { accounts.close(); photos.close(); photoPreloads.close(); PhotoDepthRuntime.release(); picker.close(); localAccess.close(); probe.shutdownNow(); media.shutdown(); controlled.shutdown(); mpv.shutdown(); rvm.close(); sources.close() }
     }
 }

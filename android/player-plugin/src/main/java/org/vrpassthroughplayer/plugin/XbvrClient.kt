@@ -6,6 +6,10 @@ import java.net.URI
 
 /** XBVR's read-only scene/list and file APIs. No metadata mutation endpoints are used. */
 internal class XbvrClient(private val account: MediaServerAccount, private val http: MediaServerHttp) : MediaLibraryClient {
+    override fun capabilities(): JSONObject = MediaLibraryPresentation.capabilities(
+        facets = listOf("tags", "performers", "studios"), search = false,
+        sorts = listOf("created_at", "title", "date", "rating100"),
+        excludes = listOf("tags", "performers", "studios"), tagMatchAll = true)
     private fun get(path: String, body: JSONObject? = null) = JSONObject(String(http.bytes(account.endpoint(path), 4 * 1024 * 1024, body), Charsets.UTF_8))
     private fun scene(id: String): JSONObject {
         mediaRequire(id.matches(Regex("[0-9]{1,20}")))
@@ -77,8 +81,24 @@ internal class XbvrClient(private val account: MediaServerAccount, private val h
         return account.endpoint("img/700x/" + cover.replace("://", ":/"))
     }
     override fun stream(id: String): MediaStreamLink {
-        val file = video(scene(id)) ?: throw MediaServerFailure("Video unavailable")
+        val data = scene(id)
+        val file = video(data) ?: throw MediaServerFailure("Video unavailable")
+        val captions = (data.optJSONArray("file") ?: JSONArray()).objects().filter {
+            it.optString("type") == "subtitles" && it.optLong("id") > 0 &&
+                it.optString("filename").substringAfterLast('.', "").lowercase() in setOf("srt", "ass", "ssa", "vtt", "smi", "sami", "sub")
+        }.distinctBy { it.getLong("id") }.sortedBy { it.optString("filename").lowercase() }.take(8).map { caption ->
+            val name = caption.getString("filename")
+            MediaSubtitleLink(account.endpoint("api/dms/file/${caption.getLong("id")}?dnt=1"), name.take(150), name.substringAfterLast('.').lowercase())
+        }
+        val audioFiles = (data.optJSONArray("file") ?: JSONArray()).objects().filter {
+            it.optLong("id") > 0 && it.optLong("size") > 0 && it.optString("filename").endsWith(".m4a", true)
+        }.associateBy { it.getString("filename") }
+        val audio = SidecarAudio.select(file.optString("filename"), audioFiles.keys).map { name ->
+            val extra = audioFiles.getValue(name)
+            MediaAudioLink(account.endpoint("api/dms/file/${extra.getLong("id")}?dnt=1"),
+                extra.getLong("id").toString() + ":" + extra.optLong("size") + ":" + extra.optString("updated_at"), SidecarAudio.title(file.optString("filename"), name))
+        }
         return MediaStreamLink(account.endpoint("api/dms/file/${file.getLong("id")}?dnt=1"),
-            file.getLong("id").toString() + ":" + file.optLong("size") + ":" + file.optString("updated_at"))
+            file.getLong("id").toString() + ":" + file.optLong("size") + ":" + file.optString("updated_at"), captions, audio)
     }
 }

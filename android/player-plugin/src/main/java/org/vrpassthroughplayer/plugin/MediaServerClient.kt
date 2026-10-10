@@ -8,7 +8,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 /** Errors crossing into Godot are codes, never server bodies or credential-bearing URLs. */
-internal class MediaServerFailure(val code: String) : Exception(code)
+internal class MediaServerFailure(val code: String, val httpStatus: Int = 0) : Exception(code)
 internal fun mediaRequire(value: Boolean, code: String = "Invalid server response") {
     if (!value) throw MediaServerFailure(code)
 }
@@ -52,7 +52,9 @@ internal object MediaLibraryUri {
 internal class MediaServerHttp(private val account: MediaServerAccount) : Closeable {
     private val live = ConcurrentHashMap.newKeySet<HttpURLConnection>()
     @Volatile private var closed = false
-    fun open(uri: URI, range: String? = null, json: JSONObject? = null): HttpURLConnection {
+    fun open(uri: URI, range: String? = null, json: JSONObject? = null,
+        method: String = if (json == null) "GET" else "POST"): HttpURLConnection {
+        mediaRequire(method in setOf("GET", "POST", "DELETE"), "Invalid server request")
         var target = uri
         repeat(6) {
             mediaRequire(account.accepts(target), "Media address differs from server")
@@ -82,8 +84,9 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
                     else -> throw MediaServerFailure("Unsupported server")
                 }
                 if (range != null) c.setRequestProperty("Range", range)
+                c.requestMethod = method
                 if (json != null) {
-                    c.requestMethod = "POST"; c.doOutput = true
+                    c.doOutput = true
                     c.setRequestProperty("Content-Type", "application/json")
                     val bytes = json.toString().toByteArray(Charsets.UTF_8)
                     c.setFixedLengthStreamingMode(bytes.size)
@@ -92,22 +95,27 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
                 val status = c.responseCode
                 if (status in setOf(301, 302, 303, 307, 308)) {
                     // Do not replay POST credentials through ambiguous redirect semantics.
-                    mediaRequire(json == null, "Check server address")
+                    mediaRequire(method == "GET" && json == null, "Check server address")
                     val location = c.getHeaderField("Location") ?: throw MediaServerFailure("Invalid server response")
                     target = target.resolve(location); release(c)
                 } else {
-                    if (status == 401 || status == 403) throw MediaServerFailure("Server authentication required")
-                    mediaRequire(status in 200..299, "Server request failed")
+                    if (status == 401 || status == 403) throw MediaServerFailure("Server authentication required", status)
+                    if (status !in 200..299) throw MediaServerFailure("Server request failed", status)
                     return c
                 }
             } catch (e: Exception) { release(c); throw if (e is MediaServerFailure) e else MediaServerFailure("Server unavailable") }
         }
         throw MediaServerFailure("Too many redirects")
     }
-    fun bytes(uri: URI, limit: Int, json: JSONObject? = null): ByteArray {
-        val c = open(uri, json = json)
+    fun bytes(uri: URI, limit: Int, json: JSONObject? = null, textSubtitle: Boolean = false,
+        method: String = if (json == null) "GET" else "POST"): ByteArray {
+        val c = open(uri, json = json, method = method)
         try {
             mediaRequire(c.contentLengthLong <= limit, "Server response too large")
+            if (textSubtitle) {
+                val type = c.contentType.orEmpty().lowercase()
+                mediaRequire(!type.contains("html") && !type.contains("json"), "Invalid subtitle response")
+            }
             return c.inputStream.use { stream ->
                 val result = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(16384)
@@ -125,6 +133,9 @@ internal class MediaServerHttp(private val account: MediaServerAccount) : Closea
 }
 
 internal interface MediaLibraryClient {
+    fun capabilities(): JSONObject = MediaLibraryPresentation.capabilities()
+    fun home(request: JSONObject): JSONObject = MediaLibraryPresentation.home(this, request)
+    fun favorite(request: JSONObject): JSONObject = throw MediaServerFailure("Server query unsupported")
     fun probe(): String
     fun browse(request: JSONObject): JSONObject
     fun candidates(request: JSONObject): JSONObject
@@ -132,6 +143,8 @@ internal interface MediaLibraryClient {
     fun cover(id: String): URI
     fun coverFallback(id: String): MediaCover? = null
     fun stream(id: String): MediaStreamLink
+    fun subtitles(id: String, stream: MediaStreamLink): List<MediaSubtitleLink> = stream.subtitles
+    fun audio(id: String, stream: MediaStreamLink): List<MediaAudioLink> = stream.audio
 }
 internal data class MediaCover(val uri: URI, val x: Int, val y: Int, val width: Int, val height: Int)
 internal fun mediaClient(account: MediaServerAccount, http: MediaServerHttp): MediaLibraryClient = when (account.provider) {
@@ -141,6 +154,10 @@ internal fun mediaClient(account: MediaServerAccount, http: MediaServerHttp): Me
     else -> throw MediaServerFailure("Unsupported server")
 }
 internal class StashClient(private val account: MediaServerAccount, private val http: MediaServerHttp) : MediaLibraryClient {
+    override fun capabilities(): JSONObject = MediaLibraryPresentation.capabilities(
+        facets = listOf("tags", "performers", "studios"),
+        filters = listOf("watched", "min_duration", "min_rating", "resolution"),
+        excludes = listOf("tags", "performers", "studios"), tagMatchAll = true, descendants = true)
     fun query(query: String, variables: JSONObject = JSONObject()): JSONObject {
         val raw = http.bytes(account.endpoint("graphql"), 4 * 1024 * 1024,
             JSONObject().put("query", query).put("variables", variables))
@@ -218,7 +235,44 @@ internal class StashClient(private val account: MediaServerAccount, private val 
         mediaRequire(link.path.endsWith("/stream"), "Original stream unavailable")
         val files = data.getJSONArray("files")
         mediaRequire(files.length() > 0, "Video unavailable")
-        return MediaStreamLink(link, data.optString("updated_at") + files.toString())
+        return MediaStreamLink(link, data.optString("updated_at") + files.toString(), basename = files.getJSONObject(0).optString("basename"))
+    }
+    override fun audio(id: String, stream: MediaStreamLink): List<MediaAudioLink> {
+        mediaRequire(id.matches(Regex("[0-9]{1,20}")))
+        if (stream.basename.isBlank()) return emptyList()
+        // Only consume audio endpoints the server advertises. A sibling disk path is not a URL.
+        val scene = query("query CompanionAudio(\$id: ID!) { findScene(id: \$id) { sceneStreams { url label mime_type } } }",
+            JSONObject().put("id", id)).optJSONObject("findScene") ?: return emptyList()
+        val candidates = (scene.optJSONArray("sceneStreams") ?: JSONArray()).objects().mapNotNull { endpoint ->
+            val url = runCatching { account.endpoint("").resolve(endpoint.getString("url")) }.getOrNull() ?: return@mapNotNull null
+            if (!account.accepts(url)) return@mapNotNull null
+            val label = endpoint.optString("label")
+            val name = if (label.endsWith(".m4a", true)) label else url.path.substringAfterLast('/')
+            if (!name.endsWith(".m4a", true)) return@mapNotNull null
+            name to url
+        }.toMap()
+        return SidecarAudio.select(stream.basename, candidates.keys).map { name ->
+            MediaAudioLink(candidates.getValue(name), stream.identity + ":audio:" + name, SidecarAudio.title(stream.basename, name))
+        }
+    }
+    override fun subtitles(id: String, stream: MediaStreamLink): List<MediaSubtitleLink> {
+        mediaRequire(id.matches(Regex("[0-9]{1,20}")))
+        val scene = query("query Captions(\$id: ID!) { findScene(id: \$id) { captions { language_code caption_type } paths { caption } } }",
+            JSONObject().put("id", id)).optJSONObject("findScene") ?: return emptyList()
+        val path = scene.optJSONObject("paths")?.optString("caption").orEmpty()
+        if (path.isBlank()) return emptyList()
+        val origin = account.endpoint("").resolve(path)
+        mediaRequire(account.accepts(origin), "Media address differs from server")
+        return (scene.optJSONArray("captions") ?: JSONArray()).objects().mapNotNull { caption ->
+            val type = caption.optString("caption_type").lowercase()
+            val language = caption.optString("language_code")
+            if (type !in setOf("srt", "vtt") || language.length > 80) return@mapNotNull null
+            // Signed Stash caption URLs already contain a query. Preserve it when adding lang/type.
+            val base = origin.toASCIIString()
+            val query = mediaQuery(mapOf("lang" to language, "type" to type))
+            MediaSubtitleLink(URI(base + (if (origin.rawQuery == null) "?" else "&") + query),
+                (language.ifBlank { "Subtitles" } + " · " + type.uppercase()).take(150), "vtt")
+        }.distinctBy { it.url }.take(8)
     }
     companion object {
         internal fun spriteCover(vtt: URI, text: String): MediaCover? {

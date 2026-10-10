@@ -11,8 +11,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 class MediaServerClientTest {
-    private data class Reply(val code: Int = 200, val headers: String = "", val body: ByteArray)
-    private class Fixture(val handle: (String, Map<String, String>, String) -> Reply) : Closeable {
+    internal data class Reply(val code: Int = 200, val headers: String = "", val body: ByteArray)
+    internal class Fixture(val handle: (String, Map<String, String>, String) -> Reply) : Closeable {
         private val socket = ServerSocket(0)
         val url = "http://127.0.0.1:${socket.localPort}"
         private val pool = Executors.newCachedThreadPool { Thread(it).apply { isDaemon = true } }
@@ -84,6 +84,19 @@ class MediaServerClientTest {
             val a = MediaServerAccount("id", "test", fixture.url, "secret")
             MediaServerHttp(a).use { http -> assertEquals("Media address differs from server",
                 assertThrows(MediaServerFailure::class.java) { http.bytes(URI(fixture.url), 100) }.code) }
+        }
+    }
+    @Test fun httpFailuresKeepStatusWithoutPublishingServerBodies() {
+        for (status in listOf(401, 403, 500)) {
+            Fixture { _, _, _ -> Reply(status, body = "private-server-body".toByteArray()) }.use { fixture ->
+                val account = MediaServerAccount("fixture", "Test", fixture.url, "private-key")
+                MediaServerHttp(account).use { http ->
+                    val error = assertThrows(MediaServerFailure::class.java) { http.bytes(URI(fixture.url), 100) }
+                    assertEquals(status, error.httpStatus)
+                    assertEquals(if (status in listOf(401, 403)) "Server authentication required" else "Server request failed", error.code)
+                    assertFalse(error.message.orEmpty().contains("private"))
+                }
+            }
         }
     }
     @Test fun actualRangeSeekAndLocalProxyPreserveBytes() {
@@ -313,5 +326,134 @@ class MediaServerClientTest {
                 assertTrue(reader.read(source.size / 2, sample, sample.size) > 0)
             } }
         }
+    }
+    @Test fun allSupportedServersLoadAuthenticatedSidecarsWithoutReplacingVideo() {
+        val video = ByteArray(64) { it.toByte() }
+        val mix = ByteArray(32) { (it + 80).toByte() }
+        val srt = "1\n00:00:01,000 --> 00:00:02,000\n服务器字幕\n".toByteArray(Charsets.UTF_8)
+        val vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n服务器字幕\n".toByteArray(Charsets.UTF_8)
+        for (provider in listOf("emby", "jellyfin", "stash", "xbvr")) {
+            val failures = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val subtitleRequests = AtomicInteger()
+            Fixture { request, headers, body ->
+                fun verify(value: Boolean, message: String) { if (!value) failures.add(message) }
+                val uri = URI(request.split(' ')[1])
+                val path = uri.path
+                when (provider) {
+                    "emby" -> verify(headers["x-emby-token"] == "fixture-key", "Emby auth")
+                    "jellyfin" -> verify(headers["authorization"].orEmpty().contains("Token=\"fixture-key\""), "Jellyfin auth")
+                    "stash" -> verify(headers["apikey"] == "fixture-key", "Stash auth")
+                    "xbvr" -> verify(headers["authorization"] == "Basic " + java.util.Base64.getEncoder().encodeToString("user:fixture-key".toByteArray()), "XBVR auth")
+                }
+                when {
+                    path.endsWith("/graphql") -> {
+                        val query = JSONObject(body).getString("query")
+                        val data = if (query.contains("CompanionAudio")) {
+                            """{"sceneStreams":[{"url":"/proxy/Audio/mix.m4a","label":"film.si.mix.m4a","mime_type":"audio/mp4"},{"url":"/proxy/Audio/wrong.m4a","label":"film0.si.mix.m4a","mime_type":"audio/mp4"}]}"""
+                        } else if (query.contains("Captions")) {
+                            verify(JSONObject(body).getJSONObject("variables").getString("id") == "1", "Stash scene binding")
+                            """{"captions":[{"language_code":"zh","caption_type":"srt"}],"paths":{"caption":"/proxy/scene/1/caption?cid=test&expires=7&signature=signed"}}"""
+                        } else """{"id":"1","updated_at":"stamp","files":[{"id":"11","basename":"film.mp4","size":"64"}],"paths":{"stream":"/proxy/scene/1/stream"}}"""
+                        Reply(body = "{\"data\":{\"findScene\":$data}}".toByteArray())
+                    }
+                    path.endsWith("/PlaybackInfo") -> Reply(body = """{"MediaSources":[
+                        {"Id":"wrong-source","SupportsDirectPlay":false,"MediaStreams":[{"Type":"Subtitle","Index":8,"IsExternal":true,"IsTextSubtitleStream":true}]},
+                        {"Id":"selected-source","Protocol":"File","Size":64,"Path":"/private/film.mp4","MediaStreams":[
+                            {"Type":"Subtitle","Index":2,"IsExternal":true,"Codec":"subrip","DisplayTitle":"中文"},
+                            {"Type":"Subtitle","Index":2,"IsExternal":true,"Codec":"subrip"},
+                            {"Type":"Subtitle","Index":3,"IsExternal":false,"Codec":"subrip"},
+                            {"Type":"Subtitle","Index":4,"IsExternal":true,"Codec":"pgs"},
+                            {"Type":"Audio","Index":5,"IsExternal":true,"Path":"/private/film.si.mix.m4a","DeliveryUrl":"/proxy/Audio/mix.m4a"},
+                            {"Type":"Audio","Index":6,"IsExternal":true,"Path":"/private/film0.si.mix.m4a","DeliveryUrl":"/proxy/Audio/wrong.m4a"}]}]}""".toByteArray())
+                    path.endsWith("/api/scene/7") -> Reply(body = """{"id":7,"file":[
+                        {"id":11,"type":"video","filename":"film.mp4","size":64,"video_width":4096},
+                        {"id":12,"type":"video","filename":"low.mp4","size":64,"video_width":1024},
+                        {"id":22,"type":"subtitles","filename":"film.zh.srt","size":80},
+                        {"id":23,"type":"subtitles","filename":"film.sup","size":80},
+                        {"id":24,"type":"audio","filename":"film.si.mix.m4a","size":32},
+                        {"id":25,"type":"audio","filename":"film0.si.mix.m4a","size":32}]}""".toByteArray())
+                    path.endsWith("/Stream.srt") || path.endsWith("/caption") || path.endsWith("/api/dms/file/22") -> {
+                        subtitleRequests.incrementAndGet()
+                        verify(headers["range"] == null, "Subtitle endpoint must not require Range support")
+                        if (provider in listOf("emby", "jellyfin")) verify(path == "/proxy/Videos/1/selected-source/Subtitles/2/Stream.srt", "Wrong video version")
+                        if (provider == "stash") {
+                            val args = uri.rawQuery.split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
+                            verify(args == mapOf("cid" to "test", "expires" to "7", "signature" to "signed", "lang" to "zh", "type" to "srt"), "Signed caption query changed")
+                        }
+                        Reply(headers = "Content-Type: text/plain; charset=utf-8\r\n", body = if (provider == "stash") vtt else srt)
+                    }
+                    path.endsWith("/Audio/mix.m4a") || path.endsWith("/api/dms/file/24") -> {
+                        val range = headers.getValue("range").removePrefix("bytes=").split('-')
+                        val start = range[0].toInt(); val end = range[1].toIntOrNull() ?: mix.lastIndex
+                        Reply(206, "Content-Type: audio/mp4\r\nContent-Range: bytes $start-$end/${mix.size}\r\n", mix.copyOfRange(start, end + 1))
+                    }
+                    path.endsWith("/stream") || path.endsWith("/api/dms/file/11") -> {
+                        val range = headers.getValue("range").removePrefix("bytes=").split('-')
+                        val start = range[0].toInt(); val end = range[1].toIntOrNull() ?: video.lastIndex
+                        Reply(206, "Content-Type: video/mp4\r\nContent-Range: bytes $start-$end/${video.size}\r\n", video.copyOfRange(start, end + 1))
+                    }
+                    else -> Reply(404, body = byteArrayOf())
+                }
+            }.use { fixture -> LocalStreamServer().use { local ->
+                var account = MediaServerAccount("fixture", "Test", fixture.url + "/proxy", "fixture-key", provider, "user1", "user")
+                val library = MediaServerLibrary({ null }, { local }, { 1 }, emit = { _, _ -> }, getAccount = { account })
+                try {
+                    val uri = MediaLibraryUri.scene(account.id, if (provider == "xbvr") "7" else "1")
+                    val movie = library.playable(uri)
+                    assertArrayEquals(video, URI(movie).toURL().readBytes())
+                    val audio = library.sidecarAudio(uri)
+                    assertEquals(provider, 1, audio.size)
+                    if (audio.isNotEmpty()) {
+                        assertEquals(SidecarAudio.CLONE_TITLE, audio.single().title)
+                        assertArrayEquals(mix, URI(audio.single().location).toURL().readBytes())
+                    }
+                    val tracks = library.sidecarSubtitles(uri)
+                    assertEquals(provider, 1, tracks.size)
+                    assertEquals(1, subtitleRequests.get())
+                    assertArrayEquals(if (provider == "stash") vtt else srt, URI(tracks.single().location).toURL().readBytes())
+                    assertTrue(tracks.single().location.startsWith("http://127.0.0.1:"))
+                    assertFalse(tracks.single().location.contains("fixture-key"))
+                    assertArrayEquals(video, URI(movie).toURL().readBytes())
+                    // Account replacement must reject stale caption metadata before issuing new reads.
+                    account = account.copy(key = "replacement")
+                    assertThrows(MediaServerFailure::class.java) { library.sidecarSubtitles(uri) }
+                    assertEquals(1, subtitleRequests.get())
+                    MediaServerLibrary.invalidate(account.id)
+                    for (location in listOf(movie, tracks.single().location) + audio.map { it.location }) {
+                        val c = URI(location).toURL().openConnection() as java.net.HttpURLConnection
+                        try { assertEquals(404, c.responseCode) } finally { c.disconnect() }
+                    }
+                    assertTrue(library.sidecarSubtitles(uri).isEmpty())
+                    assertTrue(failures.toString(), failures.isEmpty())
+                } finally { library.close() }
+            } }
+        }
+    }
+
+    @Test fun subtitleErrorsAndForeignUrlsAreNotPublishedAsTracks() {
+        val caption = "1\n00:00:01,000 --> 00:00:02,000\nCaption\n".toByteArray()
+        Fixture { request, _, _ ->
+            when (URI(request.split(' ')[1]).path) {
+                "/html" -> Reply(headers = "Content-Type: text/html\r\n", body = "<html>Login</html>".toByteArray())
+                "/json" -> Reply(headers = "Content-Type: application/json\r\n", body = "{}".toByteArray())
+                "/empty" -> Reply(body = byteArrayOf())
+                "/large" -> Reply(body = ByteArray(4 * 1024 * 1024 + 1))
+                "/denied" -> Reply(403, body = byteArrayOf())
+                else -> Reply(headers = "Content-Type: text/plain\r\n", body = caption)
+            }
+        }.use { fixture -> LocalStreamServer().use { local ->
+            val account = MediaServerAccount("fixture", "Test", fixture.url, "key")
+            val links = listOf("html", "json", "empty", "large", "denied").map {
+                MediaSubtitleLink(account.endpoint(it), it)
+            } + MediaSubtitleLink(URI("http://foreign.invalid/subtitle.srt"), "foreign") + MediaSubtitleLink(account.endpoint("valid"), "valid")
+            MediaServerHttp(account).use { http ->
+                val tracks = SidecarSubtitles.forServer(http, links) { source, name -> local.publish(source, name) }
+                assertEquals(listOf("valid"), tracks.map { it.title })
+                assertArrayEquals(caption, URI(tracks.single().location).toURL().readBytes())
+                local.revoke(tracks.single().location)
+                val c = URI(tracks.single().location).toURL().openConnection() as java.net.HttpURLConnection
+                try { assertEquals(404, c.responseCode) } finally { c.disconnect() }
+            }
+        } }
     }
 }

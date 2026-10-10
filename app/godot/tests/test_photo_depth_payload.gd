@@ -27,6 +27,16 @@ func _initialize() -> void:
 		var broken := stereo_payload.duplicate(true); broken.merge(invalid,true)
 		check(Photo._read_depth(JSON.stringify(broken)).is_empty(), "Reject incompatible or malformed generated pair")
 	DirAccess.remove_absolute(pair_path)
+	# Android hands over the GPU pair as raw RGBA rows (no PNG): same packing, exact length.
+	var raw_path := path + ".rgba"
+	var raw := pair.duplicate(); raw.convert(Image.FORMAT_RGBA8)
+	FileAccess.open(raw_path,FileAccess.WRITE).store_buffer(raw.get_data())
+	var raw_payload := stereo_payload.duplicate(true); raw_payload.stereo_path = raw_path
+	decoded = Photo._read_depth(JSON.stringify(raw_payload))
+	check(decoded.has("stereo_image") and decoded.stereo_image.get_pixel(4,4).r > .9 and decoded.stereo_image.get_pixel(40,4).g > .9 and decoded.stereo_image.has_mipmaps(), "Read raw RGBA pair without decoding")
+	FileAccess.open(raw_path,FileAccess.WRITE).store_buffer(raw.get_data().slice(0,100))
+	check(Photo._read_depth(JSON.stringify(raw_payload)).is_empty(), "Reject truncated raw pair")
+	DirAccess.remove_absolute(raw_path)
 	for rect in [[0,0,1],[-.1,0,1,1],[0,0,0,1],[.5,0,1,1],[0,0,"1",1],[0,0,null,1]]:
 		payload.rect = rect
 		check(Photo._read_depth(JSON.stringify(payload)).is_empty(), "Reject invalid rectangle: " + str(rect))

@@ -1,6 +1,7 @@
 uniform mat4 surface_transform = mat4(1.0);
 uniform bool stereo_sbs = false; // two views: side by side, or above each other with top_bottom
 uniform bool top_bottom = false;
+uniform bool stereo_half = false;
 // Lens field of view of fisheye sources (180, 190, 200, 220...).
 uniform float fisheye_fov = 180.0;
 uniform bool swap_eyes = false;
@@ -37,6 +38,9 @@ vec2 eye_uv(vec2 planar_uv, vec3 direction) {
 	float radial = acos(clamp(-d.z, -1.0, 1.0)) / radians(fisheye_fov * 0.5);
 	vec2 axis = transverse > 0.000001 ? vec2(d.x, -d.y) / transverse : vec2(0.0);
 	vec2 eye_size = view_size();
+	// An anamorphic lens occupies the whole eye rectangle (an ellipse in encoded pixels).
+	// Padded, full-resolution circles retain their pixel-circle mapping.
+	if (stereo_sbs && stereo_half) { return vec2(0.5) + 0.5 * radial * axis; }
 	return vec2(0.5) + 0.5 * radial * axis * min(eye_size.x, eye_size.y) / eye_size;
 }
 

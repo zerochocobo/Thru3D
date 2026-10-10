@@ -54,11 +54,9 @@ var packed_file := false
 var packed_alpha := false
 ## What the file name left open; filled from the first frame's shape, then cleared.
 var _layout_pending: Variant = null
+var _layout_basename := ""
 var _rvm_alpha := false # the bound pair carries an inferred Alpha
 var _clone_applied := false
-## Locked mode for files that are neither remembered nor named for VR: {geometry, layout (0 mono,
-## 1 side by side, 2 top-bottom), depth, fisheye_fov}; empty when unlocked.
-var mode_lock := {}
 var loop_enabled := false
 var requested_play := true
 var audio_track_id := -1
@@ -66,7 +64,7 @@ var audio_volume := 100.0
 var audio_muted := false
 var subtitles := SubtitleState.new()
 ## Text subtitles: on the flat screen near its lower edge; in immersive modes floating at
-## [subtitle_distance] below the line of sight, following the head lazily.
+## a video-local projection with stereo disparity controlled by [subtitle_distance].
 var caption: Label3D
 const ColorGrade := preload("res://scripts/color_grade.gd")
 var color_grade := ColorGrade.new()
@@ -77,6 +75,9 @@ var subtitle_distance := 5.0:
 var subtitle_position := SubtitleDepth.DEFAULT_POSITION:
 	set(value):
 		subtitle_position = SubtitleDepth.position(value)
+var subtitle_direction := 0:
+	set(value):
+		subtitle_direction = clampi(value, 0, 1)
 const ProjectedSubtitles := preload("res://scripts/projected_subtitles.gd")
 var projected_subtitles: Node
 const CAPTION_DROP := 0.244 # radians below the line of sight (14 degrees)
@@ -382,7 +383,8 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 	cancel_pending_open()
 	close_video()
 	# Alpha-packed and Alpha-wanted files say so in their names (PTMediaServer / DeoVR markers).
-	var stated := Naming.from_name(basename if not basename.is_empty() else (title if not title.is_empty() else uri.uri_decode().get_file()))
+	_layout_basename = basename if not basename.is_empty() else (title if not title.is_empty() else uri.uri_decode().get_file())
+	var stated := Naming.from_name(_layout_basename)
 	if uri.begins_with("medialib://"): stated.erase("alpha")
 	packed_file = bool(stated.get("packed", false))
 	packed_alpha = packed_file
@@ -396,13 +398,15 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 			geometry = int(saved.geometry)
 			stereo_sbs = bool(saved.stereo_sbs)
 			top_bottom = stereo_sbs and bool(saved.get("top_bottom", false))
+			stereo_half = stereo_sbs and bool(saved.get("stereo_half", false))
 			fisheye_fov = int(saved.get("fisheye_fov", 180)) if int(saved.get("fisheye_fov", 180)) in FISHEYE_FOVS else 180
 			swap_eyes = bool(saved.swap_eyes)
 			depth_requested = bool(saved.get("depth_requested", false)) and not stereo_sbs
 		elif not mode_lock.is_empty() and not stated.has("geometry") and not stated.has("stereo"):
 			geometry = int(mode_lock.geometry)
 			stereo_sbs = int(mode_lock.layout) != 0
-			top_bottom = int(mode_lock.layout) == 2
+			top_bottom = int(mode_lock.layout) in [2, 4]
+			stereo_half = int(mode_lock.layout) in [3, 4]
 			fisheye_fov = int(mode_lock.fisheye_fov)
 			swap_eyes = false
 			depth_requested = bool(mode_lock.depth) and not stereo_sbs
@@ -411,9 +415,10 @@ func open_local(uri: String, title: String, start_ms: int = 0, restore_mode: boo
 			geometry = int(stated.get("geometry", Geometry.Geometry.FLAT))
 			stereo_sbs = bool(stated.get("stereo", geometry in [Geometry.Geometry.HALF_EQUIRECT, Geometry.Geometry.FISHEYE]))
 			top_bottom = stereo_sbs and bool(stated.get("top_bottom", false))
+			stereo_half = stereo_sbs and bool(stated.get("stereo_half", false))
 			fisheye_fov = int(stated.get("fisheye_fov", 180))
 			swap_eyes = bool(stated.get("swap", false))
-			if not stated.has("geometry") or not stated.has("stereo"):
+			if not stated.has("geometry") or not stated.has("stereo") or (geometry in [Geometry.Geometry.FLAT, Geometry.Geometry.FISHEYE] and not stated.has("stereo_half")):
 				_layout_pending = stated
 	# Videos start as normal playback unless the name asks for live Alpha.
 	alpha_requested = alpha or (restore_mode and bool(stated.get("alpha", false)) and not packed_file)
@@ -664,6 +669,7 @@ func set_alpha(enabled: bool) -> bool:
 func set_depth(enabled: bool) -> bool:
 	if enabled and (stereo_sbs or geometry != Geometry.Geometry.FLAT):
 		return false
+	if enabled != depth_requested: _unlock_mode()
 	auto_depth = enabled
 	depth_requested = enabled
 	if enabled:
@@ -906,9 +912,9 @@ func _place_caption() -> void:
 		return
 	# Anchor in the video's coordinates, like burned-in captions. Head pose never changes it.
 	# Rotating/recentering/zooming the video moves the picture and its captions together.
-	var anchor_basis := Basis(Vector3.RIGHT, SubtitleDepth.elevation(subtitle_position))
+	var anchor_basis := SubtitleDepth.anchor(subtitle_position, subtitle_direction == 1)
 	caption.layers = 0 # The live text patch is drawn only by the video's shader.
-	projected_subtitles.update_patch(caption, material, anchor_basis, subtitle_distance, ProjectedSubtitles.runtime_ipd())
+	projected_subtitles.update_patch(caption, material, anchor_basis, subtitle_distance, ProjectedSubtitles.runtime_ipd(), subtitle_direction == 1)
 
 func seek_relative(delta_ms: int) -> bool:
 	if not platform or not media.accepts(media.session_id):
@@ -924,7 +930,8 @@ func current_lock() -> Dictionary:
 ## Locks the current mode, or unlocks when it is the locked one.
 func toggle_mode_lock() -> void:
 	var current := current_lock()
-	mode_lock = {} if str(mode_lock) == str(current) else current
+	mode_lock = {} if mode_lock == current else current
+	mode_lock_changed.emit(mode_lock.duplicate())
 	changed.emit()
 
 ## A stored lock, checked; anything malformed leaves the player unlocked.
@@ -933,7 +940,7 @@ func load_mode_lock(value: Variant) -> void:
 	if not value is Dictionary:
 		return
 	var numbers := ["geometry", "layout", "fisheye_fov"].all(func(k): return value.get(k) is int or value.get(k) is float)
-	if not numbers or not value.get("depth") is bool or int(value.geometry) not in [0, 1, 2, 3] 		or int(value.layout) not in [0, 1, 2] or int(value.fisheye_fov) not in FISHEYE_FOVS:
+	if not numbers or not value.get("depth") is bool or int(value.geometry) not in [0, 1, 2, 3] 		or int(value.layout) not in [0, 1, 2, 3, 4] or int(value.fisheye_fov) not in FISHEYE_FOVS:
 		return
 	mode_lock = {"geometry": int(value.geometry), "layout": int(value.layout), "depth": bool(value.depth) and int(value.layout) == 0,
 		"fisheye_fov": int(value.fisheye_fov)}
@@ -946,28 +953,34 @@ func toggle_loop() -> void:
 func toggle_stereo() -> void:
 	set_stereo_layout(0 if stereo_sbs and top_bottom else (2 if stereo_sbs else 1))
 
-## 0 mono, 1 side by side, 2 top-bottom.
+## 0 mono, 1 full SBS, 2 full TB, 3 half SBS, 4 half TB.
 func set_stereo_layout(layout: int) -> void:
-	if layout < 0 or layout > 2 or layout == stereo_layout():
+	if layout < 0 or layout > 4 or layout == stereo_layout():
 		return
+	_unlock_mode()
+	_layout_pending = null # A manual choice before the first frame survives detection.
+	var repack := (layout != 0) != stereo_sbs or (layout in [2, 4]) != top_bottom
 	stereo_sbs = layout != 0
-	top_bottom = layout == 2
+	top_bottom = layout in [2, 4]
+	stereo_half = layout in [3, 4]
+	var old_depth := depth_requested
 	if stereo_sbs:
 		depth_requested = false
 	elif auto_depth and geometry == Geometry.Geometry.FLAT:
 		depth_requested = true
 		alpha_requested = false
 	_remember_mode()
-	_request_revision()
+	if repack or old_depth != depth_requested: _request_revision()
 	_apply_geometry()
 	changed.emit()
 
 func stereo_layout() -> int:
-	return 0 if not stereo_sbs else (2 if top_bottom else 1)
+	return 0 if not stereo_sbs else ((4 if top_bottom else 3) if stereo_half else (2 if top_bottom else 1))
 
 func set_fisheye_fov(value: int) -> void:
 	if not value in FISHEYE_FOVS or value == fisheye_fov:
 		return
+	_unlock_mode()
 	fisheye_fov = value
 	_apply_geometry()
 	_remember_mode()
@@ -979,9 +992,11 @@ func cycle_projection() -> void:
 func set_projection(value: int) -> void:
 	if value < 0 or value > 3:
 		return
+	if value != geometry: _unlock_mode()
 	geometry = value
-	# VR180 and fisheye sources are side-by-side stereo; 360 sources are mostly mono.
-	var stereo := geometry in [Geometry.Geometry.HALF_EQUIRECT, Geometry.Geometry.FISHEYE]
+	if _layout_pending is Dictionary: _layout_pending.geometry = value
+	# Fisheye is a projection, independent of mono/SBS/TB. Preserve the chosen eye layout.
+	var stereo := stereo_sbs if geometry == Geometry.Geometry.FISHEYE else geometry == Geometry.Geometry.HALF_EQUIRECT
 	var revise := false
 	if geometry != Geometry.Geometry.FLAT and stereo != stereo_sbs:
 		stereo_sbs = stereo
@@ -1043,9 +1058,10 @@ func toggle_eye_order() -> bool:
 func _complete_layout() -> void:
 	if _layout_pending == null:
 		return
-	var chosen := Naming.complete(_layout_pending, int(media.format.width), int(media.format.height))
+	var chosen := Naming.complete(_layout_pending, int(media.format.width), int(media.format.height), media.format, _layout_basename)
 	_layout_pending = null
 	swap_eyes = chosen.swap
+	stereo_half = chosen.stereo_half
 	var tb := bool(chosen.stereo) and bool(chosen.top_bottom)
 	if int(chosen.geometry) != geometry or bool(chosen.stereo) != stereo_sbs or tb != top_bottom:
 		geometry = int(chosen.geometry)
@@ -1056,13 +1072,13 @@ func _complete_layout() -> void:
 		revise = revise or depth_requested != wanted
 		depth_requested = wanted
 		if revise: _request_revision()
-		_apply_geometry()
+	_apply_geometry()
 	Log.record("auto_layout", {"geometry": geometry, "stereo_sbs": stereo_sbs, "swap_eyes": swap_eyes,
 		"width": media.format.width, "height": media.format.height})
 
 ## Packed masks show only on the layout they were made for (fisheye side by side).
 func _apply_packed() -> void:
-	var shown := packed_file and packed_alpha and not media.last_pair.is_empty() 		and Geometry.legacy_compatible(media.format, stereo_sbs, geometry)
+	var shown := packed_file and packed_alpha and not media.last_pair.is_empty() 		and not top_bottom and not stereo_half and Geometry.legacy_compatible(media.format, stereo_sbs, geometry)
 	material.set_shader_parameter("packed_alpha", shown)
 	if shown:
 		material.set_shader_parameter("packed_size", Vector2(Geometry.packed_dimensions(int(media.format.width), int(media.format.height))))
@@ -1073,7 +1089,7 @@ func _remember_mode() -> void:
 		return
 	var mode := {"geometry": geometry, "stereo_sbs": stereo_sbs, "swap_eyes": swap_eyes,
 		"alpha_requested": alpha_requested, "profile": profile, "depth_requested": depth_requested,
-		"top_bottom": stereo_sbs and top_bottom, "fisheye_fov": fisheye_fov}
+		"top_bottom": stereo_sbs and top_bottom, "stereo_half": stereo_sbs and stereo_half, "fisheye_fov": fisheye_fov}
 	if mode_memory.remember(local_uri, mode) and not mode_memory.save():
 		Log.record("file_mode_save_failed", {"error": mode_memory.last_error})
 
@@ -1104,7 +1120,10 @@ func _present_pending() -> void:
 	media.format_revision = int(claimed.format_revision)
 	media.effect_revision = int(claimed.effect_revision)
 	media.frame_counter += 1
-	media.format = {"width": int(claimed.width), "height": int(claimed.height), "pixel_aspect": 1.0, "unapplied_rotation_degrees": 0}
+	var par := float(claimed.get("pixel_aspect", 1.0))
+	media.format = {"width": int(claimed.width), "height": int(claimed.height),
+		"pixel_aspect": par if is_finite(par) and par > 0.0 and par <= 16.0 else 1.0,
+		"stereo_mode": str(claimed.get("stereo_mode", "")), "unapplied_rotation_degrees": 0}
 	_rvm_alpha = bool(claimed.alpha_requested) and bool(claimed.inference_ran)
 	depth_enabled = bool(claimed.get("depth_requested", false)) and bool(claimed.get("depth_ran", false))
 	_apply_packed()
@@ -1333,8 +1352,12 @@ func _write_debug_report() -> void:
 func _source_size() -> Vector2:
 	return Vector2(float(media.format.width), float(media.format.height))
 
+func _pixel_aspect() -> float:
+	return float(media.format.get("pixel_aspect", 1.0))
+
 func _apply_geometry() -> void:
 	super._apply_geometry()
+	_apply_packed()
 	material.set_shader_parameter("stereo_sbs", stereo_sbs or _binding.warped)
 	material.set_shader_parameter("depth_enabled", depth_enabled and not _binding.warped)
 	material.set_shader_parameter("depth_shift", DEPTH_SHIFT * depth_strength if depth_requested else 0.0)
@@ -1347,14 +1370,14 @@ func layout_snapshot() -> Dictionary:
 	playback["bookmark_seek_mode"] = SeekPolicy.bookmark_override(bookmark_seek_mode)
 	playback["source_frame_pts_verified"] = not media.last_pair.is_empty()
 	return {"geometry": ["flat", "half_equirect_180", "fisheye_180", "equirect_360"][geometry], "stereo_sbs": stereo_sbs,
-		"top_bottom": stereo_sbs and top_bottom, "fisheye_fov": fisheye_fov,
+		"top_bottom": stereo_sbs and top_bottom, "stereo_half": stereo_sbs and stereo_half, "fisheye_fov": fisheye_fov,
 		"alpha_requested": alpha_requested, "alpha_enabled": alpha_enabled, "profile": profile,
 		"depth_requested": depth_requested, "depth_enabled": depth_enabled, "depth_strength": depth_strength, "auto_depth": auto_depth,
 		"alpha_ready": alpha_ready(), "backend": "Android_libmpv", "loop_enabled": loop_enabled,
 		"playback_control": playback, "subtitles": {"requested_track": subtitles.requested_track,
 			"cue": subtitles.cue, "text": subtitles.text,
 			"render_layer": "independent_Label3D" if geometry == Geometry.Geometry.FLAT else "video_projection_overlay",
-			"distance_m": subtitle_distance, "position": subtitle_position,
+			"distance_m": subtitle_distance, "position": subtitle_position, "direction": subtitle_direction,
 			"runtime_ipd_m": ProjectedSubtitles.runtime_ipd(),
 			"angular_parallax_rad": material.get_shader_parameter("subtitle_parallax"),
 			"anchor_space": "screen" if geometry == Geometry.Geometry.FLAT else "video_local",
@@ -1366,7 +1389,7 @@ func layout_snapshot() -> Dictionary:
 			"freeze_copy_us": int(_binding.ticket.get("freeze_copy_us", 0))}, "device_validation": "pending"}
 
 func _subtitle_anchor_direction() -> Array:
-	var anchor := Basis(Vector3.RIGHT, SubtitleDepth.elevation(subtitle_position)) * Vector3.FORWARD
+	var anchor := SubtitleDepth.anchor(subtitle_position, subtitle_direction == 1) * Vector3.FORWARD
 	return [anchor.x, anchor.y, anchor.z]
 
 func _can_loop() -> bool:

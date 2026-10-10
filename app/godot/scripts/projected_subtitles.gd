@@ -5,6 +5,9 @@ const PATCH_SIZE := 700
 var viewport: SubViewport
 var label: Label
 var _text := ""
+var _vertical := false
+var vertical_text: Control
+const VerticalText := preload("res://scripts/vertical_subtitle_text.gd")
 
 func _ready() -> void:
 	viewport = SubViewport.new()
@@ -23,17 +26,27 @@ func _ready() -> void:
 	label.add_theme_color_override("font_color", Color.WHITE)
 	label.add_theme_color_override("font_outline_color", Color.BLACK)
 	viewport.add_child(label)
+	vertical_text = VerticalText.new()
+	vertical_text.size = Vector2(PATCH_SIZE, PATCH_SIZE)
+	vertical_text.visible = false
+	viewport.add_child(vertical_text)
 
 func clear(target: ShaderMaterial) -> void:
 	if target: target.set_shader_parameter("subtitle_enabled", false)
 
-func update_patch(caption: Label3D, target: ShaderMaterial, anchor: Basis, distance: float, ipd: float) -> void:
+func update_patch(caption: Label3D, target: ShaderMaterial, anchor: Basis, distance: float, ipd: float, vertical: bool = false) -> void:
 	if not viewport or not caption.visible or caption.text.is_empty():
 		clear(target)
 		return
-	if _text != caption.text:
+	if _text != caption.text or _vertical != vertical:
 		_text = caption.text
-		label.text = _text
+		_vertical = vertical
+		label.visible = not vertical
+		vertical_text.visible = vertical
+		if vertical:
+			vertical_text.set_text(_text, preload("res://scripts/ray_menu.gd").ui_font())
+		else:
+			label.text = _text
 		viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 	target.set_shader_parameter("subtitle_texture", viewport.get_texture())
 	target.set_shader_parameter("subtitle_enabled", true)

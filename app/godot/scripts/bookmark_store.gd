@@ -112,6 +112,25 @@ func resolve(uri: String, basename: String = "", size: Variant = -1) -> String:
 	# A changed file at the same URI gets its own record. Unknown metadata never matches globally.
 	return JSON.stringify([alias, feature]).sha256_text()
 
+func relocate(old_uri: String, new_uri: String, basename: String, size: int = -1) -> bool:
+	var old_alias := Memory.key_for(old_uri)
+	var new_alias := Memory.key_for(new_uri)
+	for id in records.keys():
+		var record: Dictionary = records[id].duplicate(true)
+		if old_alias not in record.aliases: continue
+		var feature := fingerprint(basename, size)
+		if feature.is_empty(): return false
+		var copied := record.duplicate(true)
+		copied.id = JSON.stringify([new_alias, feature]).sha256_text()
+		copied.aliases = [new_alias]; copied.fingerprint = feature
+		if not _save(copied): return false
+		if record.aliases.size() > 1: record.aliases.erase(old_alias)
+		else: record.markers = [] # Persist an empty old record; its old hash must not recover the moved markers.
+		if not _save(record): return false
+		if not undo.is_empty() and str(undo.get("media_id", "")) == id: undo.media_id = copied.id
+		return true
+	return true
+
 func list_markers(id: String) -> Array:
 	var markers: Array = records.get(id, {}).get("markers", []).duplicate(true)
 	markers.sort_custom(func(a, b): return a.position_ms < b.position_ms if a.position_ms != b.position_ms else a.id < b.id)

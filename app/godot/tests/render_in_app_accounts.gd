@@ -16,7 +16,7 @@ func _run() -> void:
 		var platform := Platform.new(); menu.attach_platform(platform); menu.visible = true
 		menu.section = Menu.Section.CLOUD
 		var a: RefCounted = menu.account_panel
-		for page in ["cloud_choose", "cloud_edit", "115", "sms", "captcha", "server_choose", "emby", "stash", "dav", "license", "web", "web_keyboard"]:
+		for page in ["cloud_choose", "cloud_edit", "115", "115_open", "baidu", "aliyun_open", "quark_open", "onedrive", "webdav", "sms", "captcha", "server_choose", "emby", "stash", "dav", "license", "web", "web_keyboard"]:
 			a.close()
 			match page:
 				"cloud_choose": a.open("cloud")
@@ -29,6 +29,11 @@ func _run() -> void:
 						a.view = "captcha"
 						var image := Image.create(500, 200, false, Image.FORMAT_RGB8); image.fill(Color(0.95, 0.94, 0.9))
 						a.choices = ImageTexture.create_from_image(image); a.prompt = a.choices; a.selected.assign([3, 1])
+				"115_open", "baidu", "aliyun_open", "quark_open", "onedrive":
+					a.kind = "cloud"; a.start("cloud", page); a.data.fields.name = a.provider_name(page)
+				"webdav":
+					a.kind = "cloud"; a.start("cloud", "webdav")
+					a.data.fields.name = "WebDAV"; a.data.fields.base = "http://nas.example:19798/dav"; a.data.fields.username = "user@example.org"; a.data.password_length = 12
 				"server_choose": a.open("server")
 				"emby", "stash":
 					menu.section = Menu.Section.MEDIA_SERVER; a.kind = "server"; a.start("server", page)

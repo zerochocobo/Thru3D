@@ -68,17 +68,17 @@ func start(type: String, selected_provider: String = "", id: String = "", defaul
 	provider = selected_provider
 	session = menu.platform.account_open(type, provider, id, JSON.stringify(defaults))
 	view = "discover" if type == "discover" else ("dav" if type == "dav" else "form")
-	fields.assign(["name", "base", "username", "password"] if type == "server" else ["name", "username", "password"])
+	fields.assign(["name", "base", "username", "password"] if type == "server" or (type == "cloud" and provider == "webdav") else ["name", "username", "password"])
 	if type == "server" and provider == "stash": fields.erase("username")
-	if type == "cloud" and provider == "baidu": fields.assign(["name"])
-	field = "base" if type == "server" else "username"
+	if type == "cloud" and provider not in ["115", "webdav"]: fields.assign(["name"])
+	field = "base" if type == "server" or provider == "webdav" else "username"
 	if not field in fields: field = "name"
 	_defaults = {}
 	data = {}; revision = -1; challenge_revision = -1; title = "WebDAV" if type == "dav" else ("Search local network" if type == "discover" else provider_name(provider))
 	menu.scroll = 0.0; poll(); menu.refresh()
 
 func provider_name(value: String) -> String:
-	return {"115": "115", "baidu": I18n.t("Baidu Netdisk"), "emby": "Emby", "jellyfin": "Jellyfin", "stash": "Stash", "xbvr": "XBVR"}.get(value, value)
+	return {"115": "115", "115_open": "115", "onedrive": "OneDrive", "webdav": "WebDAV", "baidu": I18n.t("Baidu Netdisk"), "aliyun_open": I18n.t("Aliyun Drive"), "quark_open": I18n.t("Quark Netdisk"), "emby": "Emby", "jellyfin": "Jellyfin", "stash": "Stash", "xbvr": "XBVR"}.get(value, value)
 
 func poll() -> void:
 	if session <= 0 or not menu.platform: return
@@ -142,8 +142,7 @@ func rows() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	if view == "choose":
 		if kind == "cloud":
-			for p in ["115", "baidu"]: result.append({"title": provider_name(p), "icon": "cloud", "account_provider": p})
-			result.append({"title": "WebDAV", "icon": "settings", "account_dav": true})
+			for p in ["115_open", "baidu", "aliyun_open", "quark_open", "onedrive", "webdav"]: result.append({"title": provider_name(p), "icon": "cloud", "account_provider": p})
 		else:
 			result.append({"title": I18n.t("Search local network"), "icon": "refresh", "account_discover": true})
 			for p in ["emby", "jellyfin", "stash", "xbvr"]: result.append({"title": provider_name(p), "icon": "server", "account_provider": p})
@@ -189,7 +188,7 @@ func action(target: int) -> bool:
 		3: input("append", " ")
 		4: input("backspace", "")
 		5: input("paste", "")
-		6: command("save_server" if kind == "server" else "password")
+		6: command("save_server" if kind == "server" else ("save_webdav" if provider == "webdav" else "password"))
 		7: command("web")
 		8: command("rename")
 		9: command("send_sms")
@@ -222,6 +221,14 @@ func input(action_name: String, text: String) -> void:
 	if view == "web": web_action("text" if action_name == "append" else action_name, Vector2.ZERO, text)
 	else: menu.platform.account_input(session, field, action_name, text); poll()
 
+func _draw_server_choices() -> void:
+	menu._list = Node3D.new(); menu.add_child(menu._list); menu._decorations.append(menu._list); menu._bar_thumb = null
+	for i in range(1, mini(5, menu.rows.size())):
+		var k := i - 1; var row: Dictionary = menu.rows[i]
+		menu._button(menu.ROW_BASE + i, str(row.title), Vector2(-0.17 + (k % 2) * 0.65, 0.23 - (k / 2) * 0.25), Vector2(0.60, 0.21), true, "media_library", false, menu._list)
+	if not menu.rows.is_empty():
+		menu._button(menu.ROW_BASE, str(menu.rows[0].title), Vector2(0.155, -0.31), Vector2(1.25, 0.095), true, "", false, menu._list)
+
 func draw() -> void:
 	if view == "web":
 		draw_web(); return
@@ -229,7 +236,8 @@ func draw() -> void:
 	menu._label(I18n.t(title), Vector3(0.13, 0.46, 0.004), 24)
 	var enabled := not bool(data.get("busy", false))
 	if view in ["choose", "accounts", "discover", "license"]:
-		menu._draw_rows()
+		if view == "choose" and kind == "server": _draw_server_choices()
+		else: menu._draw_rows()
 		if view == "accounts": menu._button(BASE + 22, "", Vector2(0.8, 0.46), Vector2(0.09, 0.07), true, "plus")
 		if view == "discover": menu._button(BASE + 22, I18n.t("Add manually"), Vector2(0.15, -0.51), Vector2(0.38, 0.07))
 	elif view == "form" or view == "sms":
@@ -239,12 +247,12 @@ func draw() -> void:
 			menu._button(BASE + 9, str(wait) + "s" if wait > 0 else I18n.t("Send SMS code"), Vector2(-0.14, 0.15), Vector2(0.42, 0.07), enabled and wait == 0)
 			menu._button(BASE + 10, I18n.t("Verify and sign in"), Vector2(0.4, 0.15), Vector2(0.48, 0.07), enabled and bool(data.get("sms_sent", false)))
 		else:
-			if kind == "server": menu._button(BASE + 6, I18n.t("Test and save"), Vector2(0.3, -0.51), Vector2(0.4, 0.07), enabled, "", true)
+			if kind == "server" or provider == "webdav": menu._button(BASE + 6, I18n.t("Test and save"), Vector2(0.3, -0.51), Vector2(0.4, 0.07), enabled, "", true)
 			else:
 				if provider == "115":
 					menu._button(BASE + 7, I18n.t("Sign in on website"), Vector2(-0.15, 0.012), Vector2(0.54, 0.077), enabled)
 					menu._button(BASE + 6, I18n.t("Sign in"), Vector2(0.46, 0.012), Vector2(0.54, 0.077), enabled and not str(data.get("fields", {}).get("username", "")).is_empty() and int(data.get("password_length", 0)) > 0, "", true)
-				else: menu._button(BASE + 7, I18n.t("Sign in on website"), Vector2(0.17, 0.012), Vector2(0.7, 0.077), enabled, "", true)
+				else: menu._button(BASE + 7, I18n.t("Authorize" if provider in ["115_open", "baidu", "aliyun_open", "quark_open", "onedrive"] else "Sign in on website"), Vector2(0.17, 0.012), Vector2(0.7, 0.077), enabled, "", true)
 				if _editing_id():
 					menu._button(BASE + 8, "", Vector2(0.73, -0.51), Vector2(0.1, 0.07), enabled and not str(data.get("fields", {}).get("name", "")).strip_edges().is_empty(), "check")
 					menu._tips[BASE + 8] = I18n.t("Save name")

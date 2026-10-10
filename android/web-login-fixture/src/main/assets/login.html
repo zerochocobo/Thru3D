@@ -1,0 +1,11 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#d9e7ed;font:24px sans-serif;color:#173640}
+.box{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:480px;background:white;padding:32px;border-radius:20px}
+h1{margin:0 0 24px;font-size:32px}input,button{display:block;width:100%;height:52px;margin:16px 0;font:24px sans-serif;padding:8px}
+button{background:#186d68;color:white;border:0;border-radius:8px}#captcha{display:none;position:fixed;inset:0;background:#253c55cc}
+.challenge{height:210px;background:repeating-linear-gradient(45deg,#d9e7ed,#d9e7ed 20px,#b3d4cd 20px,#b3d4cd 40px);border-radius:12px}
+</style>
+<div class="box"><h1>Sign in</h1><input id="phone" type="tel" placeholder="Phone"><input id="password" type="password" placeholder="Password"><button id="login" onclick="document.getElementById('captcha').style.display='block'">Sign in</button></div>
+<div id="captcha"><div class="box"><h1>Verification</h1><div class="challenge"></div><input id="code" type="tel" placeholder="Code"><button id="confirm" onclick="document.body.dataset.confirmed='yes'">Confirm</button></div></div>

@@ -145,6 +145,26 @@ func _run() -> void:
 	viewport.get_texture().get_image().save_png(output.path_join("playback_modes_fisheye.png"))
 	if menu._buttons.filter(func(b): return b.target >= menu.MODE_LENS and b.target < menu.MODE_LENS + 4).size() != 4:
 		failures.append("Fisheye shows four lens angles")
+	state["stereo_half"] = true
+	state["mode_lock"] = {"geometry": 2, "layout": 4, "depth": false, "fisheye_fov": 200}
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("playback_modes_half_tb.png"))
+	if not menu._lit_modes.has(menu.MODE_STEREO + 6): failures.append("Half TB tile is selected")
+	if menu._buttons.any(func(b): return b.target in [Menu.MODE_STEREO + 2, Menu.MODE_STEREO + 3]): failures.append("Video modes contain removed auxiliary row")
+	var order := menu._buttons.filter(func(b): return b.target >= Menu.MODE_PROJECTION and b.target < Menu.MODE_PROJECTION + 4).map(func(b): return b.target)
+	if order != [Menu.MODE_PROJECTION, Menu.MODE_PROJECTION + 1, Menu.MODE_PROJECTION + 3, Menu.MODE_PROJECTION + 2]: failures.append("Incorrect projection order")
+	if preload("res://scripts/i18n.gd").language == "zh" and not menu.text_snapshot().contains("3D上下"): failures.append("Chinese TB label is missing")
+	for a in menu._buttons:
+		if a.target < Menu.MODE_PROJECTION or a.target >= Menu.MODE_LENS + 4: continue
+		for corner in [a.rect.position, a.rect.end]:
+			var pixel := camera.unproject_position(menu.to_global(Vector3(corner.x, corner.y, 0)))
+			if not Rect2(Vector2.ZERO, Vector2(viewport.size)).has_point(pixel): failures.append("Mode tile clipped: %d" % a.target)
+		for b in menu._buttons:
+			if b.target <= a.target or b.target < Menu.MODE_PROJECTION or b.target >= Menu.MODE_LENS + 4: continue
+			if a.rect.intersects(b.rect): failures.append("Mode tiles overlap: %d %d" % [a.target, b.target])
+	state["stereo_half"] = false
 	menu._mode_open = false
 	# Volume slider raised from the sound icon.
 	state["volume"] = 35
@@ -163,16 +183,28 @@ func _run() -> void:
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("subtitles-selected.png"))
+	state.subtitle_direction = 1
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("subtitles-vertical.png"))
+	state.subtitle_direction = 0
+	menu.refresh()
 	if menu._subtitle_ids.values() != [0, 1, 3, 8]: failures.append("Subtitle picker must show Off and real IDs")
-	if menu._buttons.filter(func(button): return button.target >= Menu.SUBTITLE_POSITION and button.target < Menu.SUBTITLE_POSITION + 5).size() != 5:
-		failures.append("VR subtitle popup must show five position controls")
-	for target in menu.choices.targets:
-		if menu.choices.targets[target].get("kind") == "open" and menu.choices.targets[target].get("key") == "subtitle_distance":
-			menu.choices.action(target)
-			break
+	if menu.choices.sliders.size() != 2:
+		failures.append("VR subtitle popup must show two sliders")
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	viewport.get_texture().get_image().save_png(output.path_join("subtitles-distance-popup.png"))
+	var saved_subtitle_options: Array = state.subtitle_options.duplicate(true)
+	state.subtitle_options = saved_subtitle_options.slice(0, 3)
+	menu.refresh()
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	viewport.get_texture().get_image().save_png(output.path_join("subtitles-no-scroll.png"))
+	if menu._buttons.any(func(b): return b.target in [Menu.SUBTITLE_UP, Menu.SUBTITLE_DOWN]):
+		failures.append("Short subtitle lists must hide scroll controls")
+	state.subtitle_options = saved_subtitle_options
 	menu.choices.reset()
 	menu.refresh()
 	state.subtitle_track = 0

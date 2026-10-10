@@ -26,8 +26,20 @@ func _run() -> void:
 	java.free()
 	menu._activate(Menu.CLOUD_ACCOUNTS)
 	check(panel.view == "choose" and not menu._grid(), "cloud plus opens provider list in the VR menu")
-	check(menu.rows.size() == 3 and menu.rows[2].title == "WebDAV", "providers and WebDAV available")
-	menu._choose(menu.rows[0])
+	check(menu.rows.size() == 6 and menu.rows[0].account_provider == "115_open" and menu.rows[0].title == "115" and menu.rows[2].account_provider == "aliyun_open" and menu.rows[3].account_provider == "quark_open" and menu.rows[4].account_provider == "onedrive" and menu.rows[5].account_provider == "webdav" and not menu.rows.any(func(row): return row.get("account_provider", "") == "115" or row.has("account_dav")), "Only 115 Open is offered for new 115 accounts")
+	panel.choose(menu.rows[5])
+	check(panel.view == "form" and panel.provider == "webdav" and panel.fields == ["name", "base", "username", "password"] and panel.field == "base", "WebDAV is a remote connection form inside the cloud library")
+	check(menu._buttons.any(func(b): return b.target == Accounts.BASE + 6) and not menu._buttons.any(func(b): return b.target in [Accounts.BASE + 7, Accounts.BASE + 14]), "WebDAV uses test/save without web login or a local service toggle")
+	panel.field = "password"; panel.input("append", "private-dav-secret")
+	check(not JSON.stringify(panel.data).contains("private-dav-secret"), "WebDAV password remains masked in the snapshot")
+	panel.action(Accounts.BASE + 6)
+	check(platform.account_calls.back()[1] == "save_webdav", "WebDAV submits remote connection settings")
+	var remote_button: Dictionary = menu._buttons.filter(func(b): return b.target == Accounts.BASE + 6)[0]
+	var remote_key: Dictionary = menu._buttons.filter(func(b): return b.target == Accounts.KEY)[0]
+	check(remote_button.rect.end.y < menu._buttons.filter(func(b): return b.target == Accounts.BASE + 1)[0].rect.position.y, "WebDAV save button does not overlap the keyboard modifiers")
+	check(menu._buttons.filter(func(b): return b.target >= Accounts.FIELD and b.target < Accounts.FIELD + 4).all(func(b): return b.rect.position.y > remote_key.rect.end.y), "four WebDAV fields stay above the keyboard")
+	panel.open("cloud")
+	panel.start("cloud", "115", "first") # Existing legacy accounts retain their management form.
 	check(panel.view == "form" and panel.provider == "115" and panel.session > 0, "115 uses backend authentication session")
 	var web_login: Dictionary = menu._buttons.filter(func(button): return button.target == Accounts.BASE + 7)[0]
 	var first_key: Dictionary = menu._buttons.filter(func(button): return button.target == Accounts.KEY)[0]
@@ -116,6 +128,15 @@ func _run() -> void:
 	panel.choose(menu.rows[1]); check(panel.fields.has("base") and panel.fields.has("password"), "server editor includes address and transient secret")
 	panel.action(Accounts.BASE + 6); check(platform.account_calls.back()[1] == "save_server", "server test and save uses backend")
 	menu.dismiss(); check(not panel.active() and panel.session == 0, "close explicitly cancels form")
+	panel.open("cloud")
+	for row in menu.rows.duplicate():
+		if row.get("account_provider", "") in ["115_open", "baidu", "aliyun_open", "quark_open", "onedrive"]:
+			panel.choose(row)
+			check(panel.fields == ["name"], "OAuth form requests a name without cookie, password or QR fields")
+			check(menu.text_snapshot().contains(menu.I18n.t("Authorize")) and not menu.text_snapshot().contains(menu.I18n.t("Sign in on website")), "OAuth providers use the authorization entry")
+			panel.action(Accounts.BASE + 7)
+			check(platform.account_calls.back()[1] == "web", "OAuth authorization uses the in-app VR web panel")
+			panel.open("cloud")
 	menu.free(); platform.free()
 	print("in-app account checks=%d failures=%d" % [checks, failures.size()])
 	for failure in failures: push_error(failure)

@@ -19,8 +19,9 @@ class QuestPlayerExport extends EditorExportPlugin:
 		return platform is EditorExportPlatformAndroid
 
 	func _get_android_libraries(_platform: EditorExportPlatform, debug: bool) -> PackedStringArray:
-		return PackedStringArray(["res://addons/quest_player/bin/player-plugin-%s.aar" % ("debug" if debug else "release")])
+		return PackedStringArray(["res://addons/quest_player/bin/player-plugin-%s.aar" % ("debug" if debug else "release"), "res://addons/quest_player/bin/cloudcore.aar"])
 
 	func _get_android_dependencies(_platform: EditorExportPlatform, _debug: bool) -> PackedStringArray:
-		# AAR library dependencies are resolved by the exported Godot Gradle app.
-		return PackedStringArray(["androidx.media3:media3-exoplayer:1.10.1", "org.codelibs:jcifs:3.0.4"])
+		# The AAR embeds jcifs without the unused HTTP NTLM adapters. Resolve only
+		# its unchanged runtime dependencies here, never the original full jcifs jar.
+		return PackedStringArray(["androidx.media3:media3-exoplayer:1.10.1", "org.slf4j:slf4j-api:1.7.36", "org.bouncycastle:bcprov-jdk18on:1.85"])

@@ -177,6 +177,10 @@ func _run() -> void:
 		"The user's remembered mode wins over the name")
 	video.queue_free()
 	await process_frame
+	var half_uri := "file:///v/half.webm"
+	var half_mode := mode.duplicate(true)
+	half_mode.merge({"geometry": 2, "top_bottom": true, "stereo_half": true}, true)
+	check(memory.remember(half_uri, half_mode) and memory.save() and read_again().lookup(half_uri) == half_mode, "Half packing survives both checksummed banks")
 	var report := {"state": "passed" if failures.is_empty() else "failed", "checks": checks,
 		"scope": "Actual Windows files and Godot player with mocked MPV; Android storage/power loss/URI permission not exercised",
 		"failures": failures}

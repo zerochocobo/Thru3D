@@ -42,18 +42,31 @@ class FakePlatform extends "res://tests/account_platform_fixture.gd":
 		return id
 	var all_files := false
 	var grants := 0
+	var usb_connected := true
+	var storage_settings: Array = []
+	var storage_settings_available := true
+	var extra_usb: Array = []
+	func storage_volumes() -> Array:
+		var result := [{"id":"/storage/emulated/0","title":"Internal storage","container":true,"volume":true,"removable":false}]
+		if usb_connected: result.append({"id":"/storage/1234-5678","uuid":"1234-5678","title":"USB drive","container":true,"volume":true,"removable":true})
+		result.append_array(extra_usb)
+		return result
 	## The headset disk: volumes, then folders and videos read from it.
 	func media_local_browse(path: String) -> int:
 		var entries := []
 		if path.is_empty():
-			entries = [{"id": "/storage/emulated/0", "title": "Internal storage", "container": true, "volume": true, "removable": false},
-				{"id": "/storage/1234-5678", "title": "USB drive", "container": true, "volume": true, "removable": true}]
+			entries = storage_volumes()
 		elif path == "/storage/emulated/0":
 			entries = [{"id": path + "/Movies", "title": "Movies", "container": true},
 				{"id": path + "/舞台.mp4", "title": "舞台.mp4", "container": false, "uri": "file:///storage/emulated/0/%E8%88%9E%E5%8F%B0.mp4", "size": 2147483648}]
 		elif path == "/storage/emulated/0/Movies":
 			entries = [{"id": path + "/b.mp4", "title": "b.mp4", "container": false, "uri": "file:///storage/emulated/0/Movies/b.mp4", "size": 1048576}]
-		return _reply({"call": "local", "source": "local", "state": "ready", "path": path, "all_files": all_files, "entries": entries})
+		elif path == "/storage/1234-5678":
+			entries = [{"id":path+"/Movies","title":"Movies","container":true}]
+		return _reply({"call": "local", "source": "local", "state": "ready", "path": path, "all_files": all_files, "entries": entries,"volumes":storage_volumes()})
+	func media_local_storage_settings(path: String) -> int:
+		storage_settings.append(path)
+		return _reply({"call":"local_eject","source":"local_eject","state":"settings_opened" if storage_settings_available else "error","error":"" if storage_settings_available else "Storage settings unavailable","volume_id":path,"unmounted":false})
 	func media_local_grant_all_files() -> void:
 		grants += 1
 		(func(): media_list.emit(0, JSON.stringify({"source": "local_access", "state": "settings_opened"}))).call_deferred()
@@ -95,6 +108,17 @@ func titles(menu: Node) -> Array:
 	return menu.rows.map(func(r): return str(r.title))
 
 func choose_setting(menu: Node, key: String, value: Variant) -> void:
+
+	for target in menu.choices.sliders:
+		if menu.choices.targets[target].key != key: continue
+		var slider: Dictionary = menu.choices.sliders[target]
+		var local: Vector3 = menu.to_local(slider.node.global_position)
+		local.x += slider.left + slider.width * inverse_lerp(slider.span.x, slider.span.y, float(value))
+		local.z = 1
+		var origin: Vector3 = menu.to_global(local)
+		menu.press_pointer("right_hand", origin, -menu.global_basis.z, true)
+		menu.release_pointer("right_hand", origin, -menu.global_basis.z, true)
+		return
 	for target in menu.choices.targets:
 		var item: Dictionary = menu.choices.targets[target]
 		if item.get("kind") == "open" and item.get("key") == key:
@@ -269,25 +293,29 @@ func _run() -> void:
 	choose_setting(menu, "output_width", 4096)
 	check(settings_events.back() == ["output_width", 4096], "Output cap setting")
 	menu._activate(Menu.TAB_BASE + Menu.GENERAL_TAB)
-	check(menu.rows[1].title == "Save play history" and menu.rows[1].value == true, "History is saved by default")
+	check(menu.rows.any(func(row): return row.get("key", "") == "history" and row.value == true), "History is saved by default")
 	choose_setting(menu, "history", false)
 	check(settings_events.back() == ["history", false], "History can be switched off")
 	menu._activate(Menu.TAB_BASE + Menu.SUBTITLES_TAB)
-	check(menu.rows.size() == 2 and menu.rows[0].choices.size() == Menu.SUBTITLE_DISTANCES.size() and menu.rows[0].value == 5.0,
-		"Subtitle distances form one dropdown, 5 m by default")
-	check(menu.rows[1].key == "subtitle_position" and menu.rows[1].choices.size() == 5 and menu.rows[1].value == 3,
-		"Global VR subtitle settings offer all five positions, lower by default")
-	choose_setting(menu, "subtitle_position", 0)
-	check(settings_events.back() == ["subtitle_position", 0], "Global position selection emits the shared setting")
-	choose_setting(menu, "subtitle_distance", 15.0)
-	check(settings_events.back() == ["subtitle_distance", 15.0], "Choosing a subtitle distance emits a setting")
-	choose_setting(menu, "subtitle_distance", 1.0)
-	check(settings_events.back() == ["subtitle_distance", 1.0], "Global settings retain near subtitle distances")
+	check(menu.rows.size() == 3 and menu.rows[0].slider and menu.rows[0].value == 5.0,
+		"Subtitle distance is a slider, 5 m by default")
+	check(menu.rows[2].key == "subtitle_position" and menu.rows[2].slider and menu.rows[2].value == 0,
+		"Global subtitle angle defaults to the marked centre")
+	check(menu.rows[1].key == "subtitle_direction" and menu.rows[1].value == 0 and menu.rows[1].choices.size() == 2,
+		"Direction control is above position, horizontal by default")
+	choose_setting(menu, "subtitle_direction", 1)
+	check(settings_events.back() == ["subtitle_direction", 1], "Global settings can choose vertical")
+	choose_setting(menu, "subtitle_position", -60)
+	check(settings_events.back() == ["subtitle_position", -60.0], "Global angle slider reaches lower endpoint")
+	choose_setting(menu, "subtitle_distance", 10.0)
+	check(settings_events.back() == ["subtitle_distance", 10.0], "Distance slider reaches 10 m")
+	choose_setting(menu, "subtitle_distance", 0.1)
+	check(settings_events.back()[0] == "subtitle_distance" and is_equal_approx(settings_events.back()[1], 0.1), "Distance slider reaches 0.1 m: %s" % str(settings_events.back()))
 	menu._activate(Menu.TAB_BASE + Menu.ABOUT_TAB)
 	var about_text := "\n".join(menu.find_children("*", "Label3D", true, false).map(func(label): return label.text))
 	check(about_text.contains("Thru3D Media Player") and about_text.contains("FFSky Studio")
-		and about_text.contains("ffskyteam@gmail.com") and about_text.contains("https://wapok.com")
-		and about_text.contains("https://github.com/zerochocobo/Thru3D"), "About brand and support")
+		and about_text.contains("ffskyteam@gmail.com") and about_text.contains("https://thru3d.com")
+		and about_text.contains("https://github.com/zerochocobo/Thru3D-Media-Player"), "About brand and support")
 	menu._activate(Menu.ROW_BASE + 5)
 	check(menu.rows[0].title == "Belfast Sunset (Pure Sky)" and menu.rows[0].detail.contains("Poly Haven · CC0 1.0")
 		and menu.rows[0].detail.contains("Dimitrios Savva / Greg Zaal / Jarod Guest") and menu.rows[1].title == "Godot",
@@ -405,7 +433,7 @@ func _run() -> void:
 	check(menu.text_snapshot().contains("本地文件") and menu.text_snapshot().contains("需要媒体访问权限") 		and not menu.text_snapshot().contains("Local files"), "Chinese menu and status")
 	menu._activate(Menu.NAV_BASE + Menu.Section.SETTINGS)
 	menu._activate(Menu.TAB_BASE + Menu.GENERAL_TAB)
-	check(menu.rows.size() == 3 and menu.rows[0].title == "语言" and menu.rows[0].value == "zh"
+	check(menu.rows.size() == 4 and menu.rows[0].title == "语言" and menu.rows[0].value == "zh"
 		and menu.rows[0].choices.map(func(option): return option.label) == ["System", "简体中文", "繁體中文", "日本語", "English"],
 		"General groups all languages in one dropdown, each named in itself")
 	var chosen := []

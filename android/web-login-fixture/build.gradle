@@ -1,0 +1,28 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def sharedViewport = tasks.register('stageWebLoginViewport', Copy) {
+    from '../player-plugin/src/main/java/org/vrpassthroughplayer/plugin/WebLoginViewport.kt'
+    into layout.buildDirectory.dir('sharedViewport')
+}
+android {
+    namespace 'org.vrpassthroughplayer.webfixture'
+    compileSdk 36
+    buildToolsVersion '36.1.0'
+    defaultConfig {
+        applicationId 'org.vrpassthroughplayer.webfixture'
+        minSdk 29
+        targetSdk 32
+        versionCode 1
+        versionName '0.1-test-only'
+    }
+    sourceSets.main.java.srcDir layout.buildDirectory.dir('sharedViewport')
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+tasks.named('preBuild').configure { dependsOn sharedViewport }

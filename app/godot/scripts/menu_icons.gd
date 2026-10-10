@@ -2,6 +2,7 @@ extends RefCounted
 
 # Original vector glyphs, generated once and shared by both ray menus.
 const PATHS := {
+	"heart": '<path d="M12 21L3.5 12.5C-2 6.5 5 0 12 6C19 0 26 6.5 20.5 12.5Z"/>',
 	"bookmark": '<path d="M6 3H18V21L12 17 6 21Z"/>',
 	"bookmark_add": '<path d="M5 3H14M5 3V21L11 17 17 21V13M17 3V11M13 7H21"/>',
 	"undo": '<path d="M8 5L3 10 8 15M3 10H14A6 6 0 0 1 14 22"/>',
@@ -9,6 +10,7 @@ const PATHS := {
 	"image": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="M3 18L10 11 14 15 18 10 21 14"/>',
 	"images": '<rect x="7" y="3" width="14" height="14" rx="2"/><path d="M3 7V21H17M8 15L13 10 17 14 20 11"/>',
 	"zoom": '<circle cx="10" cy="10" r="7"/><path d="M15 15L22 22M6 10H14M10 6V14"/>',
+	"adjust": '<path d="M3 6H7M11 6H21M3 12H13M17 12H21M3 18H5M9 18H21"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/>',
 	"minus": '<path d="M5 12H19"/>',
 	"search": '<circle cx="10" cy="10" r="6"/><path d="M15 15L21 21"/>',
 	"time": '<circle cx="12" cy="12" r="9"/><path d="M12 6V12L16 15"/>',
@@ -51,6 +53,8 @@ const PATHS := {
 	"keyboard_hide": '<rect x="3" y="3" width="18" height="11" rx="2"/><path d="M6 7H7M11 7H12M16 7H17M7 11H17M8 18L12 22 16 18"/>',
 	"previous": '<path d="M15 6L9 12 15 18"/>',
 	"circle": '<circle cx="12" cy="12" r="7"/>',
+	"sort": '<path d="M4 6H20M4 12H15M4 18H10"/>',
+	"select": '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M7 12L10 15 17 8"/>',
 	"edit": '<path d="M4 20H8L19 9 15 5 4 16Z"/>',
 	"backspace": '<path d="M8 5H21V19H8L2 12Z"/><path d="M11 9L17 15M17 9L11 15"/>',
 	"check": '<path d="M4 12L10 18 20 6"/>',
@@ -65,6 +69,7 @@ const PATHS := {
 	"stacked": '<rect x="4" y="2" width="16" height="20" rx="3"/><path d="M4 12H20"/>',
 	"history": '<path d="M3 12A9 9 0 1 0 6 5.3M3 3V8H8"/><path d="M12 7V12L15 14"/>',
 	"usb": '<path d="M12 2V17M12 2L9 5M12 2L15 5M12 11L7 8V6M12 13L17 10V8"/><circle cx="12" cy="19" r="2.5"/><rect x="5.5" y="4.5" width="3" height="2"/><circle cx="17" cy="7" r="1.3"/>',
+	"eject": '<path d="M4 14L12 4 20 14Z"/><path d="M4 20H20"/>',
 	"battery": '<rect x="7" y="4" width="10" height="18" rx="2"/><path d="M10 2H14"/>',
 	"bolt": '<path d="M14 2L7 13H11L10 22 17 10H13Z" fill="white" stroke="none"/>',
 	"lock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7A4 4 0 0 1 16 7V11"/>',

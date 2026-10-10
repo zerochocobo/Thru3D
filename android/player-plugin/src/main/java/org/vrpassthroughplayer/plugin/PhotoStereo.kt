@@ -24,11 +24,12 @@ internal object PhotoStereo {
 
     fun prepare(source: File, near: ByteBuffer, rect: FloatArray, strength: Float, generation: Int): JSONObject {
         require(strength.isFinite() && strength in 0f..2f)
-        val target = File(source.parentFile, "stereo-${(strength*100).roundToInt()}.png")
-        if (target.isFile) {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(target.path, bounds)
-            if (bounds.outWidth > 0 && bounds.outHeight > 0) return metadata(target, bounds.outWidth, bounds.outHeight, strength, 0)
+        val prefix = "stereo-${(strength*100).roundToInt()}-"
+        // Raw RGBA pair named with its size: a hit is checked by length, with nothing to decode.
+        source.parentFile?.listFiles()?.firstOrNull { it.name.startsWith(prefix) && it.extension == "rgba" }?.let { cached ->
+            val size = Regex("""-(\d+)x(\d+)$""").find(cached.nameWithoutExtension)?.groupValues
+            val w = size?.get(1)?.toIntOrNull() ?: 0; val h = size?.get(2)?.toIntOrNull() ?: 0
+            if (w > 0 && h > 0 && cached.length() == w.toLong()*h*4) return metadata(cached, w, h, strength, 0)
         }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(source.path, bounds)
@@ -54,15 +55,17 @@ internal object PhotoStereo {
             val output = ByteBuffer.allocateDirect(w*h*8).order(ByteOrder.LITTLE_ENDIAN)
             val micros = RenderBridgeNative.photoStereo(rgba,w,h,near,PhotoDepthInput.WIDTH,PhotoDepthInput.HEIGHT,rect,strength,output)
             require(micros > 0)
-            val pair = Bitmap.createBitmap(w*2,h,Bitmap.Config.ARGB_8888)
+            // The GPU pair is already RGBA rows: hand it over raw. PNG encoding a 16.8 MP pair took
+            // 4.2-6.4 s on Quest 3 (1.4-1.8 s for 5 MP), most of a large photo's wait.
+            val target = File(source.parentFile, "$prefix${w*2}x$h.rgba")
             val temporary = File(source.parentFile,"stereo-$generation.tmp")
             try {
-                output.rewind(); pair.copyPixelsFromBuffer(output)
-                temporary.outputStream().use { require(pair.compress(Bitmap.CompressFormat.PNG,100,it)) }
+                output.rewind()
+                java.io.FileOutputStream(temporary).channel.use { channel -> while (output.hasRemaining()) channel.write(output) }
                 require(temporary.renameTo(target))
-            } finally { pair.recycle(); temporary.delete() }
+            } finally { temporary.delete() }
             // Textures already decoded by Godot own their pixels. Retain the latest few disk pairs.
-            source.parentFile?.listFiles()?.filter { it.name.startsWith("stereo-") && it.extension == "png" && it != target }
+            source.parentFile?.listFiles()?.filter { it.name.startsWith("stereo-") && it.extension in setOf("png", "rgba") && it != target }
                 ?.sortedByDescending { it.lastModified() }?.drop(2)?.forEach { it.delete() }
             return metadata(target,w*2,h,strength,micros)
         } finally {

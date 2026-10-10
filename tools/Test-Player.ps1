@@ -75,12 +75,24 @@ if ((Get-Content (Join-Path $logDirectory 'thumbnails-host.log') -Raw) -match '(
 # 2D->3D per-eye parallax from the near map (desktop OpenGL; XR multiview not covered).
 & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 1800 --script res://tests/render_depth_parallax.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'depth-parallax-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Depth parallax render regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_dlna_menu.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'dlna-menu-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'dlna-menu-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'DLNA menu regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_library_menu.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'library-menu-host.log')
 if ($LASTEXITCODE -ne 0) { throw 'Library menu host regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_library_file_actions.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'library-file-actions-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'library-file-actions-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Library editing and directory sorting regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_file_editing_memory.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'file-editing-memory-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'file-editing-memory-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Renamed history and bookmarks regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_local_storage.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'local-storage-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'local-storage-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Removable storage host regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_cloud_pagination.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'cloud-pagination-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'cloud-pagination-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Cloud pagination regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_media_servers.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'media-servers-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'media-servers-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Media server host regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_media_server_browser.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'media-server-browser-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'media-server-browser-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Media server browser regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_media_server_management.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'media-server-management-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'media-server-management-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Media server management UI regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_cloud_accounts.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'cloud-accounts-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'cloud-accounts-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Cloud account management regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script res://tests/test_account_panel.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'in-app-accounts-host.log')
@@ -107,8 +119,18 @@ if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'audio-popup-h
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'flat-screen-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Flat screen controls regression failed.' }
 & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 2500 --script res://tests/test_photos.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photos-host.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photos-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo host regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 2500 --script res://tests/test_photo_adjustments.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photo-adjustments-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photo-adjustments-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo adjustments regression failed.' }
+& $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 2500 --script res://tests/test_photo_inspect_input.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photo-inspect-input-host.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photo-inspect-input-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo inspect input regression failed.' }
 & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 2500 --script res://tests/render_photos.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photos-render.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photos-render.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo render regression failed.' }
+& $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 2500 --script res://tests/render_photo_adjustments.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photo-adjustments-render.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photo-adjustments-render.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo adjustments render regression failed.' }
+& $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 2500 --script res://tests/render_photo_magnifier.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photo-magnifier-render.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photo-magnifier-render.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo magnifier render regression failed.' }
+& $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 3000 --script res://tests/render_photo_magnifier_scale.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'photo-magnifier-scale-render.log')
+if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'photo-magnifier-scale-render.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Photo magnifier visual scale regression failed.' }
 & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 3000 --script res://tests/test_background.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'background-test.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'background-test.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Application background regression failed.' }
 if ($RenderPreview) {
@@ -163,3 +185,14 @@ if ($RenderPreview) {
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'display-quality-host.log') -Raw) -match '(?m)^(SCRIPT ERROR:|ERROR:)') { throw 'Display quality settings failed.' }
 & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 1800 --script res://tests/render_sharpness.gd 2>&1 | Tee-Object -FilePath (Join-Path $logDirectory 'sharpness-render.log')
 if ($LASTEXITCODE -ne 0 -or (Get-Content (Join-Path $logDirectory 'sharpness-render.log') -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw 'Sharpness pixels failed.' }
+
+foreach ($regression in @('test_mode_unlock', 'test_immersive_lifecycle')) {
+    $regressionLog = Join-Path $logDirectory ($regression + '.log')
+    & $env:GODOT_EXE --headless --xr-mode off --path $projectDirectory --quit-after 1800 --script ("res://tests/" + $regression + '.gd') 2>&1 | Tee-Object -FilePath $regressionLog
+    if ($LASTEXITCODE -ne 0 -or (Get-Content $regressionLog -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw "$regression failed." }
+}
+foreach ($regression in @('render_immersive_alignment', 'render_alpha_menu_clarity')) {
+    $regressionLog = Join-Path $logDirectory ($regression + '.log')
+    & $env:GODOT_EXE --xr-mode off --rendering-method gl_compatibility --rendering-driver opengl3 --path $projectDirectory --quit-after 1800 --script ("res://tests/" + $regression + '.gd') 2>&1 | Tee-Object -FilePath $regressionLog
+    if ($LASTEXITCODE -ne 0 -or (Get-Content $regressionLog -Raw) -match '(?m)^(SCRIPT ERROR:|SHADER ERROR:|ERROR:)') { throw "$regression failed." }
+}

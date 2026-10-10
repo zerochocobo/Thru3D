@@ -42,16 +42,16 @@ const SUBTITLE_DOWN := 291
 const SUBTITLE_ROWS := 3
 const SUBTITLE_POSITION := 292
 
-## The bar already carries video mode, eye order, recenter, volume and subtitles, and Alpha resolution
+## The bar already carries video mode, recenter, volume and subtitles, and Alpha resolution
 ## lives in the library's Settings: this panel keeps only what neither has.
 const TABS := ["Playback", "Settings", "Info"]
 const OPERATIONS := [
 	["recent", "previous_video", "play", "next_video", "alpha", "projection", "stereo", "stop", "recenter", "mute", "subtitles",
 		"audio", "depth"],
-	["audio", "depth_strength", "screen_distance", "screen_curve", "subtitle_distance", "color_grade", "loop", "seek_mode"],
+	["audio", "depth_strength", "screen_distance", "screen_curve", "subtitle_distance", "color_grade", "loop", "seek_mode", "eyes"],
 	["capabilities"]]
-const HEADINGS := ["Audio track", "3D depth", "Screen distance", "Screen curve", "Subtitles", "Color grading", "Loop", "Video time positioning"]
-const SETTING_ICONS := ["audio", "depth", "screen", "screen", "subtitle", "settings", "loop", "history"]
+const HEADINGS := ["Audio track", "3D depth", "Screen distance", "Screen curve", "Subtitles", "Color grading", "Loop", "Video time positioning", "Eye order"]
+const SETTING_ICONS := ["audio", "depth", "screen", "screen", "subtitle", "settings", "loop", "history", "eyes"]
 const Surface := preload("res://scripts/media_surface.gd")
 const SCREEN_DISTANCES := [1.0, 2.0, 3.0, 5.0, 8.0]
 ## Flat screen curve steps (the video's CURVES) and their names.
@@ -292,7 +292,7 @@ func _draw_bar() -> void:
 		var audio := _setting_choices("audio")
 		if not audio.is_empty():
 			audio.merge({"heading": "Audio track", "rows": 4, "width": 0.88,
-				"footer": "Same folder: movie.mp4 → movie.si.mix.m4a\nLocal / SMB: switch tracks to play simultaneous translation."})
+				"footer": "movie.mp4 → movie.si.mix.m4a"})
 			choices.present(audio, Vector2(0, 0.8), Vector2(0.285, 0.85))
 		choices.finish()
 
@@ -310,39 +310,37 @@ func _draw_subtitles() -> void:
 	var tracks := _subtitle_tracks()
 	_subtitle_offset = clampi(_subtitle_offset, 0, maxi(0, tracks.size() - SUBTITLE_ROWS))
 	var immersive := _immersive_subtitles()
-	var lift := 0.04 if immersive else 0.0
-	var panel := _quad(Vector2(1.0, 0.70 if immersive else 0.38), Vector3(0, 0.635 if immersive else 0.475, 0.001), Color(PANEL, 0.96), 10)
+	var footer_height := 0.08 if tracks.size() > SUBTITLE_ROWS else 0.0
+	var lift := (0.04 if immersive else 0.0) + footer_height
+	var panel := _quad(Vector2(1.0, (0.80 if immersive else 0.38) + footer_height), Vector3(0, (0.685 if immersive else 0.475) + footer_height / 2, 0.001), Color(PANEL, 0.96), 10)
 	panel.material_override.set_shader_parameter("corner_radius", 0.025)
 	add_child(panel)
 	_decorations.append(panel)
-	var heading_y := 0.915 if immersive else 0.615
+	var heading_y := (1.015 if immersive else 0.615) + footer_height
 	var heading := _label(I18n.t("Subtitles"), Vector3(-0.44, heading_y, 0.004), 18)
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_button(SUBTITLE_UP, "↑", Vector2(0.33, heading_y), Vector2(0.07, 0.055), _subtitle_offset > 0)
-	_button(SUBTITLE_DOWN, "↓", Vector2(0.42, heading_y), Vector2(0.07, 0.055), _subtitle_offset + SUBTITLE_ROWS < tracks.size())
 	if immersive:
-		_subtitle_position_chips(SUBTITLE_POSITION, 0.805, 0.19, 0.17)
-		var distance := _label(I18n.t("Distance"), Vector3(-0.44, 0.695, 0.004), 18)
-		distance.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		choices.field(null, {"key": "subtitle_distance", "value": _state.get("subtitle_distance", SubtitleDepth.DEFAULT),
-			"choices": SubtitleDepth.distance_choices()}, Vector2(0.14, 0.695), 0.60, 0.055)
+		var direction_heading := _label(I18n.t("Subtitle direction"), Vector3(-0.44, 0.915 + footer_height, 0.004), 18)
+		direction_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		choices.field(null, SubtitleDepth.direction_row(int(_state.get("subtitle_direction", 0))), Vector2(0.14, 0.915 + footer_height), 0.60, 0.065)
+		for key in ["subtitle_position", "subtitle_distance"]:
+			var y := (0.805 if key == "subtitle_position" else 0.695) + footer_height
+			var slider_heading := _label(I18n.t(("Horizontal position" if int(_state.get("subtitle_direction", 0)) == 1 else "Subtitle position") if key == "subtitle_position" else "Distance"), Vector3(-0.44, y, 0.004), 18)
+			slider_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+			choices.field(null, SubtitleDepth.slider_row(key, float(_state.get(key, SubtitleDepth.DEFAULT_POSITION if key == "subtitle_position" else SubtitleDepth.DEFAULT))), Vector2(0.14, y), 0.60, 0.075)
 	_subtitle_row(SUBTITLE_ROW, 0, I18n.t("Off"), 0.545 + lift)
 	for index in range(_subtitle_offset, mini(tracks.size(), _subtitle_offset + SUBTITLE_ROWS)):
 		var track: Dictionary = tracks[index]
 		_subtitle_row(SUBTITLE_ROW + index + 1, int(track.id), _subtitle_label(track), 0.47 + lift - (index - _subtitle_offset) * 0.075)
+	if footer_height > 0:
+		_button(SUBTITLE_UP, "↑", Vector2(-0.07, 0.24 + lift), Vector2(0.10, 0.055), _subtitle_offset > 0)
+		_button(SUBTITLE_DOWN, "↓", Vector2(0.07, 0.24 + lift), Vector2(0.10, 0.055), _subtitle_offset + SUBTITLE_ROWS < tracks.size())
 	if immersive:
 		choices.bounds = Vector2(0.285, 0.955)
 		choices.finish()
 
 func _immersive_subtitles() -> bool:
 	return _state.get("has_video", false) and int(_state.get("geometry", 0)) != 0
-
-func _subtitle_position_chips(base: int, y: float, pitch: float, width: float) -> void:
-	var selected := SubtitleDepth.position(int(_state.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION)))
-	for i in SubtitleDepth.POSITIONS.size():
-		_button(base + i, I18n.t(SubtitleDepth.POSITIONS[i]), Vector2((i - 2) * pitch, y), Vector2(width, 0.065))
-		(_buttons.back().node.get_child(0) as Label3D).font_size = 18
-		if i == selected: _buttons.back().base_color = SELECTED
 
 func _subtitle_row(target: int, id: int, text: String, y: float) -> void:
 	_subtitle_ids[target] = id
@@ -590,48 +588,62 @@ func release_pointer(hand: String, _origin: Vector3, _direction: Vector3, _track
 func _bar_key() -> String:
 	return str([_state.get("clone_voice", false), _state.get("geometry", 0), _state.get("has_video", false),
 		_state.get("source_uri", ""), _subtitle_tracks(), _state.get("subtitle_track", 0), bookmarks.key(), _state.get("audio_options", []), _state.get("audio_track_id", -1),
-		_state.get("subtitle_distance", SubtitleDepth.DEFAULT), _state.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION)])
+		_state.get("subtitle_distance", SubtitleDepth.DEFAULT), _state.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION), _state.get("subtitle_direction", 0)])
 
 func _seek_at(x: float) -> int:
 	return roundi(clampf((x + BAR_SEEK / 2) / BAR_SEEK, 0.0, 1.0) * int(_state.get("duration_ms", 0)))
+
+func _supports_half_layouts() -> bool:
+	return true
 
 ## Video mode: every projection and stereo layout at once, the current ones lit (no cycling).
 ## Pressing a lit tile again locks that projection and layout for unnamed new files (a lock on
 ## the corner of both); pressing a locked one again unlocks.
 func _draw_modes() -> void:
 	_lit_modes = {}
+	var half_choices := _supports_half_layouts()
 	var lock: Dictionary = _state.get("mode_lock", {})
 	var locked := {}
 	if not lock.is_empty():
 		locked[MODE_PROJECTION + int(lock.geometry)] = true
-		locked[MODE_STEREO + (3 if lock.depth else [0, 1, 4][int(lock.layout)])] = true
+		locked[MODE_STEREO + (3 if lock.depth and not half_choices else [0, 1, 4, 5, 6][int(lock.layout)])] = true
 	var fisheye := int(_state.get("geometry", 0)) == 2
 	# The lens row sits under the layouts: the panel rises to clear the floating round buttons.
 	var top := 0.61 if fisheye else 0.47
+	if half_choices: top = 0.465 if fisheye else 0.365
 	# Fisheye adds a row of lens angles under the layouts.
-	var panel := _quad(Vector2(1.06, 0.5 if fisheye else 0.36), Vector3(0, top - (0.07 if fisheye else 0.0), 0.001), Color(PANEL, 0.94), 10)
+	var height := (0.33 if fisheye else 0.24) if half_choices else (0.5 if fisheye else 0.36)
+	var centre_y := (0.44 if fisheye else 0.385) if half_choices else top - (0.07 if fisheye else 0.0)
+	var panel := _quad(Vector2(1.06, height), Vector3(0, centre_y, 0.001), Color(PANEL, 0.94), 10)
 	panel.material_override.set_shader_parameter("corner_radius", 0.04)
 	add_child(panel)
 	_decorations.append(panel)
 	var projection := int(_state.get("geometry", 0))
 	var names := ["Flat", "180°", "Fisheye", "360°"]
 	var icons := ["screen", "dome", "fisheye", "panorama"]
-	for g in 4:
-		_mode_tile(MODE_PROJECTION + g, I18n.t(names[g]), icons[g], Vector2(-0.3 + g * 0.2, top + 0.075), projection == g)
+	var projection_order := [0, 1, 3, 2]
+	for column in projection_order.size():
+		var g: int = projection_order[column]
+		_mode_tile(MODE_PROJECTION + g, I18n.t(names[g]), icons[g], Vector2(-0.3 + column * 0.2, top + 0.075), projection == g)
 	var stereo: bool = _state.get("stereo", false)
 	var depth: bool = _state.get("depth_requested", false)
 	var tb: bool = stereo and _state.get("top_bottom", false)
-	_mode_tile(MODE_STEREO, "2D", "screen", Vector2(-0.4, top - 0.09), not stereo and not depth)
-	_mode_tile(MODE_STEREO + 1, "3D SBS", "stereo", Vector2(-0.2, top - 0.09), stereo and not tb)
-	_mode_tile(MODE_STEREO + 4, "3D TB", "stacked", Vector2(0, top - 0.09), tb)
-	# 2D source shown in 3D: depth estimated live, one view per eye.
-	_mode_tile(MODE_STEREO + 3, I18n.t("Auto 3D"), "depth", Vector2(0.2, top - 0.09), depth, not stereo and projection == 0)
-	var swapped: bool = _state.get("swap_eyes", false)
-	_mode_tile(MODE_STEREO + 2, ("B / T" if swapped else "T / B") if tb else ("R / L" if swapped else "L / R"), "eyes",
-		Vector2(0.4, top - 0.09), false, stereo)
+	var half_layout: bool = stereo and _state.get("stereo_half", false)
+	var layouts_y := top - (0.04 if half_choices else 0.09)
+	_mode_tile(MODE_STEREO, "2D", "screen", Vector2(-0.4, layouts_y), not stereo and not depth)
+	_mode_tile(MODE_STEREO + 1, I18n.t("3D SBS"), "stereo", Vector2(-0.2, layouts_y), stereo and not tb and not half_layout)
+	_mode_tile(MODE_STEREO + 4, I18n.t("3D TB"), "stacked", Vector2(0.2 if half_choices else 0, layouts_y), tb and not half_layout)
+	if half_choices:
+		_mode_tile(MODE_STEREO + 5, I18n.t("Half SBS"), "stereo", Vector2(0, layouts_y), stereo and not tb and half_layout)
+		_mode_tile(MODE_STEREO + 6, I18n.t("Half TB"), "stacked", Vector2(0.4, layouts_y), tb and half_layout)
+	var controls_y := top - (0.15 if half_choices else 0.09)
+	# Photos retain their existing controls; video depth is on the bar, eye order in Settings.
+	if not half_choices:
+		_mode_tile(MODE_STEREO + 3, I18n.t("Auto 3D"), "depth", Vector2(0.2, controls_y), depth, not stereo and projection == 0)
+		_mode_tile(MODE_STEREO + 2, _caption("eyes"), "eyes", Vector2(0.4, controls_y), false, stereo)
 	if fisheye:
 		for i in LENS_FOVS.size():
-			_button(MODE_LENS + i, "%d°" % LENS_FOVS[i], Vector2(-0.3 + i * 0.2, top - 0.235), Vector2(0.18, 0.08))
+			_button(MODE_LENS + i, "%d°" % LENS_FOVS[i], Vector2(-0.3 + i * 0.2, layouts_y - 0.11 if half_choices else controls_y - 0.145), Vector2(0.18, 0.06 if half_choices else 0.08))
 			if int(_state.get("fisheye_fov", 180)) == LENS_FOVS[i]:
 				_buttons.back().base_color = SELECTED
 	for button in _buttons:
@@ -640,7 +652,8 @@ func _draw_modes() -> void:
 			_icon("lock", Vector3(half.x - 0.022, half.y - 0.022, 0.005), 0.026, ACCENT, button.node)
 
 func _mode_tile(target: int, text: String, icon: String, centre: Vector2, current: bool, enabled: bool = true) -> void:
-	_button(target, text, centre, Vector2(0.18, 0.13), enabled, icon)
+	var height := (0.08 if target in [MODE_STEREO + 2, MODE_STEREO + 3] else 0.1) if _supports_half_layouts() else 0.13
+	_button(target, text, centre, Vector2(0.18, height), enabled, icon)
 	if current:
 		_buttons.back().base_color = SELECTED
 		_lit_modes[target] = true
@@ -707,6 +720,7 @@ func _setting_choices(operation: String) -> Dictionary:
 func _ready() -> void:
 	super()
 	choices.changed.connect(func(key, value): setting_requested.emit(key, value))
+	choices.previewed.connect(func(key, value): adjustment_requested.emit(key, value))
 
 func _seek_bar(y: float) -> void:
 	_button(SEEK, "", Vector2(0, y), Vector2(BAR_SEEK + 0.06, 0.05), _can_seek())
@@ -783,10 +797,6 @@ func _activate(target: int) -> void:
 		refresh()
 		return
 	if section == 0 and _subtitle_open:
-		if _immersive_subtitles() and target >= SUBTITLE_POSITION and target < SUBTITLE_POSITION + SubtitleDepth.POSITIONS.size():
-			setting_requested.emit("subtitle_position", target - SUBTITLE_POSITION)
-			refresh()
-			return
 		if target in [SUBTITLE_UP, SUBTITLE_DOWN]:
 			_scroll_subtitles(-SUBTITLE_ROWS if target == SUBTITLE_UP else SUBTITLE_ROWS)
 			return
@@ -832,6 +842,9 @@ func _activate(target: int) -> void:
 		refresh()
 	elif target == MODE_STEREO + 4:
 		action_requested.emit("stereo_tb")
+		refresh()
+	elif target == MODE_STEREO + 5 or target == MODE_STEREO + 6:
+		action_requested.emit("stereo_half_sbs" if target == MODE_STEREO + 5 else "stereo_half_tb")
 		refresh()
 	elif target >= MODE_LENS and target < MODE_LENS + LENS_FOVS.size():
 		action_requested.emit("fov_%d" % LENS_FOVS[target - MODE_LENS])
@@ -881,7 +894,7 @@ func _enabled(operation: String) -> bool:
 		"play", "loop", "stop": return has_video
 		"previous_video", "next_video": return has_video and _state.get("has_" + operation, false)
 		"alpha": return has_video and int(_state.get("geometry", 0)) in [1, 2]
-		"eyes": return _state.get("stereo", false)
+		"eyes": return has_video and _state.get("stereo", false)
 		"volume_down", "volume_up", "mute": return has_video and _state.get("audio_available", false)
 		"audio": return has_video
 		"clone_voice": return has_video and _state.get("clone_voice", false)
@@ -912,7 +925,9 @@ func _caption_text(operation: String) -> String:
 		"seek_mode": return "Precise" if _state.get("seek_mode", "speed") == "exact" else "Speed"
 		"stop": return "Close video"
 		"stereo": return ("TB" if _state.get("top_bottom", false) else "SBS") if _state.get("stereo", false) else "2D"
-		"eyes": return "R / L" if _state.get("swap_eyes", false) else "L / R"
+		"eyes":
+			if _state.get("top_bottom", false): return "B / T" if _state.get("swap_eyes", false) else "T / B"
+			return "R / L" if _state.get("swap_eyes", false) else "L / R"
 		"projection": return str(_state.get("projection", "Flat"))
 		"quality": return str(_state.get("profile", "320x320"))
 		"recenter": return "Recenter"
@@ -924,7 +939,7 @@ func _caption_text(operation: String) -> String:
 		"depth_strength": return _depth_caption()
 		"subtitles": return "Subtitles"
 		"capabilities": return "Refresh device info"
-		"subtitle_distance": return "%.1f m · %s" % [float(_state.get("subtitle_distance", 5.0)), I18n.t(SubtitleDepth.POSITIONS[SubtitleDepth.position(int(_state.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION)))])]
+		"subtitle_distance": return "%.1f m · %+.0f°" % [float(_state.get("subtitle_distance", 5.0)), float(_state.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION))]
 		"screen_distance": return "%.1f m" % float(_state.get("screen_distance", Surface.SCREEN_DISTANCE))
 		"color_grade": return str(_state.get("color_grade", {}).get("preset", "Original"))
 		"screen_curve": return CURVE_NAMES[clampi(roundi(float(_state.get("screen_curve", 0.0)) / 0.35), 0, 3)]
@@ -979,11 +994,13 @@ func _draw_adjustments() -> void:
 		for i in SCREEN_DISTANCES.size():
 			_button(420 + i, "%.1f m" % SCREEN_DISTANCES[i], Vector2(-0.56 + i * 0.28, -0.05), Vector2(0.25, 0.075))
 	elif _adjustment == "subtitle_distance":
-		_adjustment_row(450, "subtitle_distance", "Subtitle distance", Vector3(SubtitleDepth.LIMITS.x, SubtitleDepth.LIMITS.y, 0.05), 0.17)
-		for i in 5:
-			_button(420 + i, "%.1f m" % SubtitleDepth.PRESETS[i], Vector2(-0.56 + i * 0.28, -0.05), Vector2(0.25, 0.075))
-		_label(I18n.t("Subtitle position"), Vector3(0, -0.21, 0.004), 20)
-		_subtitle_position_chips(440, -0.325, 0.28, 0.25)
+		var direction_heading := _label(I18n.t("Subtitle direction"), Vector3(-0.66, 0.29, 0.004), 20)
+		direction_heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		choices.field(null, SubtitleDepth.direction_row(int(_state.get("subtitle_direction", 0))), Vector2(0.33, 0.29), 0.7, 0.07)
+		_adjustment_row(450, "subtitle_distance", "Subtitle distance", Vector3(SubtitleDepth.LIMITS.x, SubtitleDepth.LIMITS.y, 0.1), 0.17)
+		_adjustment_row(451, "subtitle_position", "Horizontal position" if int(_state.get("subtitle_direction", 0)) == 1 else "Subtitle position", Vector3(SubtitleDepth.POSITION_LIMITS.x, SubtitleDepth.POSITION_LIMITS.y, 1), -0.05)
+		_decoration(Vector2(0.003, 0.03), Vector2(0.33, -0.05), Color.WHITE)
+		_label(I18n.t("Middle"), Vector3(0.33, -0.015, 0.004), 14)
 	else:
 		for i in Grade.PRESETS.size():
 			_button(410 + i, I18n.t(Grade.PRESETS[i]), Vector2(-0.56 + i * 0.28, 0.38), Vector2(0.25, 0.075))
@@ -1015,10 +1032,11 @@ func _refresh_adjustments() -> void:
 	var values: Dictionary = _state.get("grade_values", Grade.DEFAULTS)
 	for row in _adjust_rows.values():
 		var distance: bool = row.key in ["subtitle_distance", "screen_distance"]
-		var value := float(_state.get(row.key, 5.0 if row.key == "subtitle_distance" else Surface.SCREEN_DISTANCE)) if distance else float(values.get(row.key, Grade.DEFAULTS[row.key]))
+		var position: bool = row.key == "subtitle_position"
+		var value := float(_state.get(row.key, 5.0 if row.key == "subtitle_distance" else Surface.SCREEN_DISTANCE)) if distance else (float(_state.get(row.key, SubtitleDepth.DEFAULT_POSITION)) if position else float(values.get(row.key, Grade.DEFAULTS[row.key])))
 		var fraction := clampf((value - row.span.x) / (row.span.y - row.span.x), 0, 1)
 		if row.key == "subtitle_distance": fraction = SubtitleDepth.slider_fraction(value)
-		row.label.text = "%.1f m" % value if distance else ("%d K" % value if row.key == "temperature" else ("%+.2f EV" % value if row.key == "exposure" else "%.3f" % value))
+		row.label.text = "%.1f m" % value if distance else ("%+.0f°" % value if position else ("%d K" % value if row.key == "temperature" else ("%+.2f EV" % value if row.key == "exposure" else "%.3f" % value)))
 		row.fill.visible = fraction > 0
 		row.fill.mesh.size.x = maxf(0.001, fraction * 0.6)
 		row.fill.position.x = 0.03 + fraction * 0.3
@@ -1027,11 +1045,6 @@ func _refresh_adjustments() -> void:
 	var selected := str(_state.get("color_grade", {}).get("preset", "Original"))
 	for name in _preset_buttons:
 		_preset_buttons[name].base_color = SELECTED if name == selected else TILE
-	if _adjustment == "subtitle_distance":
-		var position := SubtitleDepth.position(int(_state.get("subtitle_position", SubtitleDepth.DEFAULT_POSITION)))
-		for button in _buttons:
-			if button.target >= 440 and button.target < 445:
-				button.base_color = SELECTED if button.target - 440 == position else TILE
 
 func _set_adjustment_at(x: float) -> void:
 	if not _adjust_rows.has(_adjust_target): return
@@ -1050,12 +1063,6 @@ func _activate_adjustment(target: int) -> void:
 		_adjustment = ""
 	elif _adjustment == "screen_distance" and target >= 420 and target < 425:
 		adjustment_requested.emit("screen_distance", SCREEN_DISTANCES[target - 420])
-		adjustment_committed.emit()
-	elif _adjustment == "subtitle_distance" and target >= 420 and target < 425:
-		adjustment_requested.emit("subtitle_distance", SubtitleDepth.PRESETS[target - 420])
-		adjustment_committed.emit()
-	elif _adjustment == "subtitle_distance" and target >= 440 and target < 445:
-		adjustment_requested.emit("subtitle_position", target - 440)
 		adjustment_committed.emit()
 	elif _adjustment == "color_grade":
 		if target >= 410 and target < 415:

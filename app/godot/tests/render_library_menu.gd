@@ -37,9 +37,11 @@ func _run() -> void:
 	menu.settings_provider = func(): return {"profile": "320x320", "profiles": ["320x320", "384x216", "512x512"], "output_width": 0, "version": ProjectSettings.get_setting("application/config/version"), "display_quality_pending": true}
 	camera.add_child(menu)
 	menu.attach_platform(platform)
+	menu.storage_eject_requested.connect(func(volume): menu.finish_storage_release(volume.id))
 	menu.toggle()
 	var failures: Array[String] = []
 	var steps := [["recent", []], ["local_all", [Menu.NAV_BASE + Menu.Section.LOCAL]], ["local_folder", [Menu.ROW_BASE]],
+		["local_usb", [Menu.USB_STORAGE]], ["local_usb_eject", [Menu.EJECT_STORAGE]],
 		["smb", [Menu.NAV_BASE + Menu.Section.SMB, Menu.REFRESH]], ["smb_share", [Menu.ROW_BASE, Menu.ROW_BASE]],
 		["smb_editor", [Menu.BACK, Menu.BACK, Menu.ADD, Menu.KEY_BASE + 1, Menu.KEY_BASE + 9]],
 		["dlna", [Menu.CANCEL, Menu.NAV_BASE + Menu.Section.DLNA]], ["cloud", [Menu.NAV_BASE + Menu.Section.CLOUD]],
@@ -52,6 +54,9 @@ func _run() -> void:
 		steps = [["settings", [Menu.NAV_BASE + Menu.Section.SETTINGS]], ["subtitles", [Menu.TAB_BASE + Menu.SUBTITLES_TAB]],
 			["background", [Menu.TAB_BASE + Menu.BACKGROUND_TAB]], ["about", [Menu.TAB_BASE + Menu.ABOUT_TAB]],
 			["language", [Menu.TAB_BASE + Menu.GENERAL_TAB]], ["display", [Menu.TAB_BASE + Menu.DISPLAY_TAB]], ["credits", [Menu.TAB_BASE + Menu.ABOUT_TAB, Menu.ABOUT_HOME, Menu.ROW_BASE + 5]], ["credits_end", []]]
+	if OS.get_environment("QUEST_STORAGE_PREVIEW_ONLY") == "1":
+		steps = [["local_all",[Menu.NAV_BASE+Menu.Section.LOCAL]],["local_folder",[Menu.ROW_BASE]],
+			["local_usb",[Menu.USB_STORAGE]],["local_usb_eject",[Menu.EJECT_STORAGE]]]
 	for step in steps:
 		for target in step[1]:
 			menu._activate(target)
@@ -60,7 +65,7 @@ func _run() -> void:
 		if step[0] == "credits_end":
 			menu.scroll = menu._max_scroll()
 			menu._draw()
-		menu.update_pointer("right_hand", menu.to_global(Vector3(0.2, 0.33, 0.1)), -menu.global_basis.z, true)
+		menu.update_pointer("right_hand", menu.to_global(Vector3(0.47,0.46,0.1) if str(step[0]).begins_with("local_usb") else Vector3(0.2,0.33,0.1)), -menu.global_basis.z, true)
 		await process_frame
 		await RenderingServer.frame_post_draw
 		await RenderingServer.frame_post_draw

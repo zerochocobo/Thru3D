@@ -140,6 +140,9 @@ func capabilities() -> Dictionary:
 		"performance_levels": performance_levels,
 		"foveation_level": foveation_level,
 		"render_scale": render_scale,
+		# Vendors can shrink the actual render region without changing the allocated eye buffers.
+		"meta_dynamic_resolution_enabled": bool(ProjectSettings.get_setting("xr/openxr/extensions/meta/dynamic_resolution", true)),
+		"render_target_size_scope": "allocated_eye_buffer",
 		"viewport_scaling_3d_scale": viewport.scaling_3d_scale if viewport else 1.0,
 		"captured_ticks_usec": Time.get_ticks_usec(),
 	}

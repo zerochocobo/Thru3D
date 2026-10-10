@@ -39,3 +39,9 @@ The independent depth backend processes flat mono videos/photos using Depth Anyt
 The Godot export plugin references the separately built Kotlin AAR and Maven dependencies. The matching Godot template provides one engine. Each Android export preset enables one vendor loader. Models, SDK/addon binaries and native libraries are prepared outside Git and checked during packaging.
 
 The public snapshot removes private store-capture automation from the application startup path. It retains runtime icons, the licensed background, synthetic fixtures and production behavior. Source-only tests do not establish headset passthrough quality, tracking or sustained thermal performance.
+
+## Cloud providers
+
+Existing 115 and Baidu clients retain encrypted account records. The embedded OpenList JNI core supplies additional provider connections, including 115 Open, OneDrive, Aliyun Drive and Quark. Only the capability-protected loopback media router listens on HTTP. Authorization stays in the same Activity's VR web panel; provider-specific callbacks are validated against the active session/state before importing credentials and checking directory access. Quark uses the FnNAS broker's nonce-bound callback exchange. No OpenList frontend or separate Android account window is used. Real-account and minimum-headset validation remains separate from source publication.
+
+Media-server browsing separates home sections, loaded pages, filter/category state and detail navigation. Favorites use server support where available and a local fallback otherwise. Source policies and native/Go bridges provide supported rename/delete operations without assuming every backend permits writes. Photo magnification maps the displayed image's local projected size to a separate inspection window; it does not enlarge the underlying full-image shader.

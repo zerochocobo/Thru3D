@@ -26,7 +26,7 @@ internal object SidecarAudio {
         val stem = video.substringBeforeLast('.')
         if (stem.isEmpty()) return emptyList()
         // "<stem>.": part1.mp4 must not take part10.si.mix.m4a.
-        return names.filter { it.startsWith("$stem.", ignoreCase = true) && it.endsWith(".m4a", ignoreCase = true) }
+        return names.filter { '/' !in it && '\\' !in it && it.startsWith("$stem.", ignoreCase = true) && it.endsWith(".m4a", ignoreCase = true) }
             .sortedWith(compareBy({ !it.endsWith(CLONE_SUFFIX, ignoreCase = true) }, { it.lowercase() }))
             .take(LIMIT)
     }
@@ -39,6 +39,14 @@ internal object SidecarAudio {
         return extra.ifEmpty { "M4A" }
     }
 
+    fun forCloud(path: String, client: CloudClient, publish: (CloudFile) -> String): List<Track> {
+        val files = client.list(path.substringBeforeLast('/').ifEmpty { "/" })
+            .filter { !it.folder && it.size > 0 }.associateBy { it.name }
+        val video = path.substringAfterLast('/')
+        return select(video, files.keys).mapNotNull { name ->
+            runCatching { Track(publish(files.getValue(name)), title(video, name)) }.getOrNull()
+        }
+    }
     fun forFile(path: String): List<Track> {
         val video = File(path)
         val names = video.parentFile?.list()?.toList() ?: return emptyList()

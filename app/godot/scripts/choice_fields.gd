@@ -1,6 +1,8 @@
 extends RefCounted
 ## One setting per field. Choice actions commit on the owning hand's release.
 signal changed(key: String, value: Variant)
+signal previewed(key: String, value: Variant)
+var sliders: Dictionary = {}
 const BASE := 8000
 const POPUP_ROWS := 6
 const PITCH := 0.071
@@ -18,11 +20,12 @@ var bounds := Vector2(-0.44, 0.35)
 func _init(owner: Node3D) -> void: menu = owner
 
 func reset() -> void:
+	_finish_slider()
 	opened = ""; offset = 0; scroll = 0.0; capture.clear(); popup.clear()
 
 func begin(context: String, vertical_bounds: Vector2 = Vector2(-0.44, 0.35)) -> void:
 	if scope != context: reset()
-	scope = context; bounds = vertical_bounds; targets.clear(); popup.clear()
+	scope = context; bounds = vertical_bounds; targets.clear(); sliders.clear(); popup.clear()
 
 static func same(a: Variant, b: Variant) -> bool:
 	if (a is int or a is float) and (b is int or b is float): return is_equal_approx(float(a), float(b))
@@ -49,6 +52,9 @@ func _button(item: Dictionary, label: String, centre: Vector2, size: Vector2, pa
 	return target
 
 func field(parent: Node3D, row: Dictionary, centre: Vector2, width: float, height: float = 0.06) -> void:
+	if row.get("slider", false):
+		_slider(parent, row, centre, width, height)
+		return
 	var options: Array = row.choices
 	var key: String = row.key
 	if options.size() <= 2 or row.get("compact", false):
@@ -69,6 +75,63 @@ func field(parent: Node3D, row: Dictionary, centre: Vector2, width: float, heigh
 			popup = row.duplicate(true)
 			var point: Vector3 = menu.to_local(menu._buttons.back().node.global_position)
 			anchor = Vector2(point.x, point.y)
+
+# A wide invisible hit target surrounds the rail; graphics follow the button's plane.
+func _slider(parent: Node3D, row: Dictionary, centre: Vector2, width: float, height: float) -> void:
+	var rail_width := width - 0.15
+	var target := _button({"kind": "slider", "key": row.key, "span": row.span}, "", centre, Vector2(width, height), parent)
+	var button: Dictionary = menu._buttons.back()
+	button.base_color = Color(menu.TILE, 0)
+	button.node.material_override.set_shader_parameter("surface_color", button.base_color)
+	var node: MeshInstance3D = button.node
+	var left := -width / 2 + 0.015
+	var y := -0.008 if row.get("midpoint", false) else 0.0
+	var rail: MeshInstance3D = menu._quad(Vector2(rail_width, 0.007), Vector3(left + rail_width / 2, y, 0.004), menu.MUTED, 14)
+	node.add_child(rail)
+	var fill: MeshInstance3D = menu._quad(Vector2(rail_width, 0.007), rail.position, menu.ACCENT, 15)
+	node.add_child(fill)
+	if row.get("midpoint", false):
+		var tick: MeshInstance3D = menu._quad(Vector2(0.003, 0.023), Vector3(left + rail_width / 2, y, 0.005), Color.WHITE, 16)
+		node.add_child(tick)
+		var middle: Label3D = menu._label(menu.I18n.t("Middle"), Vector3(left + rail_width / 2, 0.023, 0.006), 12, node)
+		middle.render_priority = 16
+	var knob: MeshInstance3D = menu._quad(Vector2(0.022, 0.022), Vector3(left, y, 0.006), Color.WHITE, 17)
+	node.add_child(knob)
+	var label: Label3D = node.get_child(0)
+	label.position = Vector3(width / 2 - 0.005, 0, 0.006)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	sliders[target] = {"span": row.span, "left": left, "width": rail_width, "fill": fill, "knob": knob,
+		"label": label, "unit": row.unit, "node": node}
+	# Capture retains the last preview through ordinary menu redraws.
+	var value := float(capture.value) if capture.get("item", {}).get("key", "") == row.key and capture.has("value") else float(row.value)
+	_refresh_slider(target, value)
+
+func _refresh_slider(target: int, value: float) -> void:
+	if not sliders.has(target): return
+	var slider: Dictionary = sliders[target]
+	var fraction := clampf(inverse_lerp(slider.span.x, slider.span.y, value), 0, 1)
+	slider.fill.visible = fraction > 0
+	slider.fill.mesh.size.x = maxf(0.001, fraction * slider.width)
+	slider.fill.position.x = slider.left + fraction * slider.width / 2
+	slider.fill.material_override.set_shader_parameter("surface_size", slider.fill.mesh.size)
+	slider.knob.position.x = slider.left + fraction * slider.width
+	slider.label.text = ("%+.0f" % value if slider.unit == "°" and value != 0 else ("%.0f" % value if slider.unit == "°" else "%.1f" % value)) + slider.unit
+
+func _preview_slider(point: Vector3) -> void:
+	var span: Vector3 = capture.item.span
+	var fraction := clampf((point.x - float(capture.left)) / float(capture.width), 0, 1)
+	var value := clampf(snappedf(lerpf(span.x, span.y, fraction), span.z), span.x, span.y)
+	if capture.has("value") and is_equal_approx(capture.value, value): return
+	capture.value = value
+	_refresh_slider(int(capture.target), value)
+	previewed.emit(str(capture.item.key), value)
+
+func _finish_slider() -> bool:
+	if capture.get("item", {}).get("kind", "") != "slider": return false
+	var request := capture.duplicate(true)
+	capture.clear()
+	if request.has("value"): changed.emit(str(request.item.key), request.value)
+	return true
 
 ## Icon-triggered lists share the same ownership, scrolling and selection as settings fields.
 func present(row: Dictionary, centre: Vector2, vertical_bounds: Vector2) -> void:
@@ -150,13 +213,25 @@ func press(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> 
 		return false
 	capture = {"hand": hand, "target": target, "scope": scope, "item": targets[target].duplicate(true),
 		"point": hit.point, "offset": offset, "moved": false}
+	if capture.item.kind == "slider":
+		var slider: Dictionary = sliders[target]
+		capture.left = menu.to_local(slider.node.global_position).x + slider.left
+		capture.width = slider.width
+		_preview_slider(hit.point)
 	return true
 
 func update(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> void:
 	if capture.is_empty() or capture.hand != hand: return
-	if not tracked or not menu.visible or capture.scope != scope: capture.clear(); return
+	if not tracked or not menu.visible or capture.scope != scope:
+		if not _finish_slider(): capture.clear()
+		return
 	var point: Variant = _capture_point(origin, direction)
-	if point == null: capture.clear(); return
+	if point == null:
+		if not _finish_slider(): capture.clear()
+		return
+	if capture.item.kind == "slider":
+		_preview_slider(point)
+		return
 	var delta: Vector2 = Vector2(point.x-capture.point.x, point.y-capture.point.y)
 	if delta.length() > 0.018: capture.moved = true
 	if capture.moved and not opened.is_empty():
@@ -175,6 +250,7 @@ func _capture_point(origin: Vector3, direction: Vector3) -> Variant:
 
 func release(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -> void:
 	if capture.is_empty() or capture.hand != hand: return
+	if _finish_slider(): return
 	var request := capture.duplicate(true)
 	capture.clear()
 	if not tracked or not menu.visible or request.scope != scope or request.moved: return
@@ -184,7 +260,8 @@ func release(hand: String, origin: Vector3, direction: Vector3, tracked: bool) -
 	action(int(request.target))
 
 func cancel(hand: String) -> void:
-	if capture.get("hand", "") == hand: capture.clear()
+	if capture.get("hand", "") == hand:
+		if not _finish_slider(): capture.clear()
 
 func stick_scroll(y: float, delta: float) -> bool:
 	if opened.is_empty(): return false

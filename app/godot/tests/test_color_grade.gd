@@ -43,12 +43,12 @@ func _run() -> void:
 	var video := Video.new()
 	video.subtitle_distance = 1
 	check(video.subtitle_distance == 1, "Near subtitle distance is retained for close stereo video")
-	video.subtitle_distance = 0.1
-	check(video.subtitle_distance == 0.5, "Subtitle minimum")
+	video.subtitle_distance = 0.01
+	check(is_equal_approx(video.subtitle_distance, 0.1), "Subtitle minimum")
 	video.subtitle_distance = INF
 	check(video.subtitle_distance == 5, "Invalid subtitle depth defaults to 5m")
 	video.subtitle_distance = 100
-	check(video.subtitle_distance == 20, "Subtitle maximum")
+	check(video.subtitle_distance == 10, "Subtitle maximum")
 	video.free()
 	var menu := Menu.new()
 	menu.state_provider = func(): return {"has_video": true, "geometry": 1, "subtitle_distance": distance, "color_grade": grade.snapshot(), "grade_values": grade.values()}
@@ -64,15 +64,16 @@ func _run() -> void:
 	menu._activate(100 + Menu.OPERATIONS[1].find("subtitle_distance"))
 	check(menu._adjustment == "subtitle_distance", "Playback setting opens distance editor")
 	menu.press_pointer("right", menu.to_global(Vector3(0.63, 0.17, 1)), -menu.global_basis.z, true)
-	check(distance == 20 and commits == 0, "Ray press previews subtitle depth")
+	check(distance == 10 and commits == 0, "Ray press previews subtitle depth")
 	menu.update_pointer("left", menu.to_global(Vector3(0.03, 0.17, 1)), -menu.global_basis.z, true)
-	check(distance == 20, "Other hand cannot move active slider")
+	check(distance == 10, "Other hand cannot move active slider")
 	menu.release_pointer("right", Vector3.ZERO, Vector3.ZERO, true)
 	check(commits == 1 and menu._adjust_hand.is_empty(), "Release saves and ends drag")
-	menu._activate(421)
-	check(distance == 1.0, "Near preset reaches the playback setting")
+	menu.press_pointer("right", menu.to_global(Vector3(0.03, 0.17, 1)), -menu.global_basis.z, true)
+	check(is_equal_approx(distance, 0.1), "Distance slider reaches near endpoint")
+	menu.release_pointer("right", Vector3.ZERO, Vector3.ZERO, true)
 	menu.press_pointer("right", menu.to_global(Vector3(0.33, 0.17, 1)), -menu.global_basis.z, true)
-	check(absf(distance - 1.0) < 0.06, "Slider midpoint offers useful near stereo disparity")
+	check(absf(distance - 5.05) < 0.06, "Slider midpoint maps linearly to metres")
 	menu.release_pointer("right", Vector3.ZERO, Vector3.ZERO, true)
 	menu._activate(400)
 	menu._activate(100 + Menu.OPERATIONS[1].find("color_grade"))

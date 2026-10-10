@@ -26,7 +26,7 @@ func _initialize() -> void:
 	# Player conventions, any case and order.
 	check(Naming.from_name("Movie.VR180.SBS.mkv") == {"geometry": half, "stereo": true}, "Dots separate markers")
 	check(Naming.from_name("scene_fisheye190_LR.mp4") == {"geometry": fisheye, "fisheye_fov": 190, "stereo": true}, "DeoVR fisheye190")
-	check(Naming.from_name("scene-MKX200-3dh.mp4") == {"geometry": fisheye, "fisheye_fov": 200, "stereo": true}, "Lens and half-SBS markers")
+	check(Naming.from_name("scene-MKX200-3dh.mp4") == {"geometry": fisheye, "fisheye_fov": 200, "stereo": true, "stereo_half": true}, "Lens and half-SBS markers")
 	check(Naming.from_name("a_VRCA220_LR.mp4").fisheye_fov == 220 and Naming.from_name("a_RF52_LR.mp4").fisheye_fov == 190
 		and Naming.from_name("a_fisheye210_LR.mp4").fisheye_fov == 200 and Naming.from_name("a_fisheye_LR.mp4").fisheye_fov == 180,
 		"Lens markers give their field of view, snapped to the offered ones")
@@ -39,18 +39,42 @@ func _initialize() -> void:
 	check(Naming.from_name("clip_TB_180.mp4") == {"geometry": half, "stereo": true, "top_bottom": true}, "Top-bottom 180")
 	check(Naming.from_name("trip_360_BT.mp4") == {"geometry": full, "stereo": true, "top_bottom": true, "swap": true}, "Bottom-top swaps")
 	check(Naming.from_name("film.Over-Under.3D.mkv") == {"stereo": true, "top_bottom": true}, "Over-under wins over a bare 3D")
-	check(Naming.complete({"stereo": true, "top_bottom": true}, 4096, 4096) == {"geometry": full, "stereo": true, "top_bottom": true, "swap": false},
+	check(Naming.complete({"stereo": true, "top_bottom": true}, 4096, 4096) == {"geometry": full, "stereo": true, "top_bottom": true, "stereo_half": false, "swap": false},
 		"Stated top-bottom square is 360")
-	check(Naming.complete({}, 5760, 5760) == {"geometry": full, "stereo": true, "top_bottom": true, "swap": false}, "Large unmarked square is 360 top-bottom")
-	check(Naming.complete({}, 1080, 1080) == {"geometry": flat, "stereo": false, "top_bottom": false, "swap": false}, "Small square stays flat 2D")
+	check(Naming.complete({}, 5760, 5760) == {"geometry": full, "stereo": true, "top_bottom": true, "stereo_half": false, "swap": false}, "Large unmarked square is 360 top-bottom")
+	check(Naming.complete({}, 1080, 1080) == {"geometry": flat, "stereo": false, "top_bottom": false, "stereo_half": false, "swap": false}, "Small square stays flat 2D")
 	# Frame shape fills the rest.
-	check(Naming.complete({}, 8192, 4096) == {"geometry": half, "stereo": true, "top_bottom": false, "swap": false}, "Unmarked 2:1 is VR180 SBS")
-	check(Naming.complete({}, 3840, 1080) == {"geometry": flat, "stereo": true, "top_bottom": false, "swap": false}, "32:9 is a flat full-SBS film")
-	check(Naming.complete({}, 1920, 1080) == {"geometry": flat, "stereo": false, "top_bottom": false, "swap": false}, "16:9 is flat 2D")
-	check(Naming.complete({"stereo": false}, 7680, 3840) == {"geometry": full, "stereo": false, "top_bottom": false, "swap": false}, "Mono 2:1 is 360")
-	check(Naming.complete({"stereo": true, "swap": true}, 3840, 1920) == {"geometry": half, "stereo": true, "top_bottom": false, "swap": true}, "RL at 2:1")
-	check(Naming.complete({"geometry": full}, 4096, 2048) == {"geometry": full, "stereo": false, "top_bottom": false, "swap": false}, "360 defaults mono")
+	check(Naming.complete({}, 8192, 4096) == {"geometry": half, "stereo": true, "top_bottom": false, "stereo_half": false, "swap": false}, "Unmarked 2:1 is VR180 SBS")
+	check(Naming.complete({}, 3840, 1080) == {"geometry": flat, "stereo": true, "top_bottom": false, "stereo_half": false, "swap": false}, "32:9 is a flat full-SBS film")
+	check(Naming.complete({}, 1920, 1080) == {"geometry": flat, "stereo": false, "top_bottom": false, "stereo_half": false, "swap": false}, "16:9 is flat 2D")
+	check(Naming.complete({"stereo": false}, 7680, 3840) == {"geometry": full, "stereo": false, "top_bottom": false, "stereo_half": false, "swap": false}, "Mono 2:1 is 360")
+	check(Naming.complete({"stereo": true, "swap": true}, 3840, 1920) == {"geometry": half, "stereo": true, "top_bottom": false, "stereo_half": false, "swap": true}, "RL at 2:1")
+	check(Naming.complete({"geometry": full}, 4096, 2048) == {"geometry": full, "stereo": false, "top_bottom": false, "stereo_half": false, "swap": false}, "360 defaults mono")
 	check(Naming.complete({"geometry": fisheye}, 4000, 2000).stereo, "Fisheye defaults SBS")
+	for marker in ["HSBS", "Half-SBS", "3DH"]:
+		check(Naming.from_name("film_" + marker + ".mp4").get("stereo_half", false), "Half SBS marker " + marker)
+	for marker in ["HTB", "Half-TB", "HOU", "3DV"]:
+		check(Naming.from_name("film_" + marker + ".webm").get("stereo_half", false) and Naming.from_name("film_" + marker + ".webm").top_bottom, "Half TB marker " + marker)
+	check(Naming.from_name("film_fullSBS.mp4").stereo and not Naming.from_name("film_fullSBS.mp4").stereo_half, "FullSBS marker")
+	check(Naming.from_name("film_fullTB.mp4").top_bottom and not Naming.from_name("film_fullTB.mp4").stereo_half, "FullTB marker")
+	check(not Naming.complete(Naming.from_name("film_SBSF.mp4"), 1920, 1080).stereo_half, "Explicit full packing wins over shape")
+	check(Naming.complete(Naming.from_name("film_HSBS.mp4"), 1920, 1080).stereo_half, "Flat half SBS inferred without changing eye order")
+	check(Naming.complete(Naming.from_name("film_HTB.mp4"), 1920, 1080).stereo_half, "Flat half TB")
+	var youtube := Naming.complete(Naming.from_name("[3D camera] clip.webm"), 5760, 4320, {"stereo_mode": "ab2l"}, "[3D camera] clip.webm")
+	check(youtube.stereo and youtube.top_bottom and youtube.stereo_half, "YouTube top-bottom metadata overrides generic 3D")
+	check(youtube.geometry == flat, "Stereo metadata alone cannot assert a fisheye projection")
+	for mode in ["sbsl", "sbsr", "sbs2l", "sbs2r", "abl", "abr", "ab2l", "ab2r"]:
+		var layout := Naming.complete({}, 1920, 1080, {"stereo_mode": mode})
+		check(layout.stereo and layout.top_bottom == mode.begins_with("ab") and layout.swap == mode.ends_with("r"), "Container eye order " + mode)
+	check(not Naming.complete({}, 3840, 1080, {"stereo_mode": "sbs2l"}).stereo_half, "MPV SBS2 metadata does not force half packing for full SBS")
+	check(not Naming.complete({"geometry": fisheye}, 3840, 2048, {"stereo_mode": "sbs2l"}).stereo_half, "Container SBS preserves the near-square fisheye circle")
+	check(not Naming.complete(Naming.from_name("film_SBS.mp4"), 3840, 1080, {"stereo_mode": "abl"}, "film_SBS.mp4").top_bottom, "Explicit SBS filename overrides container layout")
+	check(not Naming.complete(Naming.from_name("film_2D.mp4"), 1920, 1080, {"stereo_mode": "abl"}, "film_2D.mp4").stereo, "Explicit mono filename wins")
+	check(Naming.complete({"geometry": fisheye}, 5760, 4320, {"stereo_mode": "abl"}).stereo_half, "Compressed TB fisheye fills the ellipse")
+	check(not Naming.complete({"geometry": fisheye}, 3840, 2048, {"stereo_mode": "sbsl", "pixel_aspect": 2.0}).stereo_half, "Near-square per-eye fisheye keeps its original circle")
+	check(not Naming.complete({"geometry": fisheye}, 2048, 2048).stereo, "An unnamed single square fisheye lens stays mono")
+	check(Naming.complete(Naming.from_name("clip_fisheye_HSBS.mp4"), 2048, 2048).stereo, "Explicit half-SBS distinguishes a squeezed pair from a single lens")
+	check(Naming.complete({"geometry": fisheye}, 2048, 2048, {"stereo_mode": "sbs2l"}).stereo, "Container SBS distinguishes two views in a square packed fisheye")
 	print("media naming checks=%d failures=%d" % [checks, failures.size()])
 	for failure in failures:
 		push_error(failure)

@@ -9,7 +9,7 @@ if(NOT MNN_SOURCE OR NOT EXISTS "${MNN_SOURCE}/include/MNN/Interpreter.hpp" OR N
     message(FATAL_ERROR "Pass -DMNN_SOURCE and -DMNN_LIB (run tools/Build-MnnAndroid.sh)")
 endif()
 add_library(quest_rvm SHARED rvm_backend.cpp rvm_channel_mean.cpp rvm_identity_tile.cpp rvm_state_guard.cpp rvm_benchmark_jni.cpp
-    rvm_runtime_jni.cpp rvm_mnn_backend.cpp depth_runtime_jni.cpp depth_stabilizer.cpp photo_depth.cpp)
+    rvm_runtime_jni.cpp rvm_mnn_backend.cpp depth_runtime_jni.cpp depth_stabilizer.cpp photo_depth.cpp media_delete.cpp)
 target_compile_features(quest_rvm PRIVATE cxx_std_17)
 target_compile_definitions(quest_rvm PRIVATE QUEST_DIAGNOSTIC_MODELS=$<BOOL:${QUEST_DIAGNOSTIC_MODELS}>)
 target_include_directories(quest_rvm PRIVATE "${RVM_PROFILE_INCLUDE}")

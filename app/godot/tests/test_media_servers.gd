@@ -40,7 +40,8 @@ func _run() -> void:
 	check(menu.rows.size() == 1 and menu.rows[0].server_account.id == "srv", "server list")
 	menu._choose(menu.rows[0])
 	var first: int = platform.next
-	check(platform.requests[first].action == "browse" and platform.requests[first].page == 1, "server query begins on page one")
+	check(platform.requests[first].action == "home", "server begins at common homepage")
+	b.capabilities = {"navigation": ["tags", "performers", "studios"], "facets": ["tags", "performers", "studios"], "filters": ["watched", "min_duration", "min_rating", "resolution"], "tag_match_all": true, "descendants": true, "exclude_facets": ["tags", "performers", "studios"], "sorts": ["created_at", "title", "date", "duration", "rating100"]}
 	b.query.q = "new"; b.browse()
 	var second: int = platform.next
 	platform.answer(first, {"entries": [{"id": "9", "title": "stale"}], "total": 1})
@@ -77,10 +78,10 @@ func _run() -> void:
 	b.choose({"toggle": "watched"}); check(not b.query.has("watched"), "watched all")
 	b.choose({"scene": {"id": "1"}})
 	platform.answer(platform.next, {"detail": {"id": "1", "title": "Scene", "uri": "medialib://srv/scene/1", "basename": "test_180_SBS.mp4", "tags": [], "performers": [], "markers": [{"title": "Start", "position_ms": 45000}]}})
-	check(b.view == "detail" and menu.rows.size() == 2, "detail and marker rows")
+	check(b.view == "detail" and menu.rows.size() == 3, "detail and marker rows")
 	var selected: Array = []
 	menu.chosen.connect(func(uri, title): selected.append([uri, title]))
-	menu._choose(menu.rows[1])
+	menu._choose(menu.rows[2])
 	check(selected.size() == 1 and selected[0][0] == "medialib://srv/scene/1", "play stable identity")
 	check(b.selection.start_ms == 45000 and b.selection.basename == "test_180_SBS.mp4", "marker and source filename preserved")
 	check(not menu.visible and b.pending.is_empty(), "play closes UI and cancels prefetch")
@@ -94,9 +95,11 @@ func _run() -> void:
 	check(Menu.NAV_ORDER.find(Menu.Section.MEDIA_SERVER) + 1 == Menu.NAV_ORDER.find(Menu.Section.SETTINGS), "servers immediately above settings")
 	for provider in ["emby", "jellyfin"]:
 		b.server = {"id": "test", "provider": provider}; b.view = "filters"
+		b.capabilities = {"facets": ["genres", "tags", "performers", "studios"], "filters": ["watched", "min_rating"]}
 		var rows: Array = b.rows()
-		check(rows.size() == 3 and rows.all(func(row): return not row.has("category")), provider + " only supported filters")
+		check(rows.size() == 7 and rows.filter(func(row): return row.has("category")).size() == 4, provider + " only supported filters")
 	b.server = {"id": "test", "provider": "xbvr"}; b.view = "filters"
+	b.capabilities = {"facets": ["tags", "performers", "studios"], "filters": ["watched"]}
 	check(b.rows().size() == 5, "XBVR tag actor studio watched and reset")
 	b.view = "servers"; b.servers = [{"id": "test", "name": "NAS", "provider": "jellyfin"}]
 	check(b.rows()[0].detail == "Jellyfin", "provider badge")
@@ -113,8 +116,8 @@ func _run() -> void:
 	var failed_id: int = b.pending.keys()[0]
 	platform.answer(failed_id, {"state": "error", "error": "Cover unavailable"})
 	check(not b.failed_covers.is_empty(), "missing cover recorded")
-	b.query.page = 2; b.action(Browser.ACTION + 12)
-	check(b.failed_covers.is_empty() and platform.requests[platform.next].page == 2, "refresh retries failures without returning to page one")
+	b.query.page = 1; b.action(Browser.ACTION + 12)
+	check(b.failed_covers.is_empty() and platform.requests[platform.next].page == 1, "refresh renews scoped list and retries missing covers")
 	platform.answer(platform.next, {"entries": [{"id": "49", "title": "Page two"}], "total": 100})
 	check(b.pending.values().any(func(req): return req.action == "cover" and req.scene_id == "49"), "page two requests its cover")
 	b.cancel(); b.view = "servers"; b.servers = [{"id": "srv", "name": "Test"}]; b.action(Browser.ACTION + 13)
@@ -142,7 +145,7 @@ func _run() -> void:
 	check(menu.account_panel.view == "accounts" and not b.setup, "explicit server edit opens in-app account management")
 	menu.account_panel.close(); menu.refresh()
 	menu._choose(menu.rows[0])
-	check(platform.requests[platform.next].action == "browse" and platform.requests[platform.next].server_id == "emby-new", "new Emby entry opens its library")
+	check(platform.requests[platform.next].action == "home" and platform.requests[platform.next].server_id == "emby-new", "new Emby entry opens its library")
 	b.action(Browser.ACTION + 1)
 	menu.account_panel.close(); b.load_servers(); menu.refresh()
 	platform.android_lifecycle.emit("resume")

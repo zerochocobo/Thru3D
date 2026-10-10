@@ -1,4 +1,4 @@
-﻿param([string]$ToolRoot = $(if ($env:THRU3D_TOOL_ROOT) { $env:THRU3D_TOOL_ROOT } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cache\thru3d-toolchain' }),
+param([string]$ToolRoot = $(if ($env:THRU3D_TOOL_ROOT) { $env:THRU3D_TOOL_ROOT } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cache\thru3d-toolchain' }),
     [ValidateSet('OfficialRelease','SourceFrame')][string]$MpvCandidate = 'SourceFrame',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_.-]*\.apk$')][string]$ApkName = '',
     [ValidateSet('Quest','Pico','OpenXR')][string]$XrVendor = 'Quest',
@@ -96,6 +96,7 @@ if (-not (Test-Path -LiteralPath $godotApi)) {
         [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $godotApi, $false)
     } finally { $archive.Dispose() }
 }
+& "$PSScriptRoot\environment\Prepare-OpenList.ps1" -ToolRoot $ToolRoot
 # A cold Gradle daemon prints an SDK XML warning on stderr; only the exit code decides.
 $ErrorActionPreference = 'Continue'
 & "$workspace\android\gradlew.bat" -p "$workspace\android" "-PgodotAarPath=$godotApi" "-PincludeDiagnostics=$($IncludeDiagnostics.IsPresent.ToString().ToLowerInvariant())" :player-plugin:assembleDebug :player-plugin:assembleRelease $(if ($SkipUnitTests) { @() } else { @(':player-plugin:testDebugUnitTest') }) --console=plain 2>&1 | Out-File (Join-Path $logDirectory 'plugin-build.log') -Encoding utf8
@@ -151,6 +152,9 @@ if ($LASTEXITCODE -ne 0) { throw 'APK alignment validation failed.' }
 & "$env:ANDROID_HOME\build-tools\36.1.0\aapt2.exe" dump xmltree $apkPath --file AndroidManifest.xml 2>&1 | Out-File (Join-Path $logDirectory 'apk-manifest.txt') -Encoding utf8
 if ($LASTEXITCODE -ne 0) { throw 'APK manifest inspection failed.' }
 $manifestText = Get-Content (Join-Path $logDirectory 'apk-manifest.txt') -Raw
+if ($manifestText.Contains('android.permission.ACCESS_MEDIA_LOCATION')) {
+    throw 'APK requests media GPS metadata access, which the player does not use.'
+}
 # Inspect the merged APK, not just the preset. Meta immersive apps target SDK 34;
 # the compile SDK may remain newer. Minimum SDK 32 excludes retired Quest 1 OSes.
 $androidSdk = @{}
@@ -209,7 +213,7 @@ try {
     $abis = @($apkArchive.Entries | Where-Object { $_.FullName -match '^lib/([^/]+)/.+\.so$' } | ForEach-Object { $_.FullName.Split('/')[1] } | Sort-Object -Unique)
     if ($abis.Count -ne 1 -or $abis[0] -ne 'arm64-v8a') { throw 'APK has unexpected native architectures.' }
     if (@($apkArchive.Entries | Where-Object { $_.FullName -match '^lib/.*/libgodot_android\.so$' }).Count -ne 1) { throw 'APK must contain exactly one Godot engine library.' }
-    if ($apkArchive.GetEntry('lib/arm64-v8a/libgojni.so') -or ($apkArchive.Entries | Where-Object { $_.FullName -match '(^|/)(openlist|cloudcore)(/|\.)' })) { throw 'APK still contains the retired OpenList core.' }
+    if (-not $apkArchive.GetEntry('lib/arm64-v8a/libgojni.so')) { throw 'APK is missing the embedded OpenList core.' }
     if (-not $apkArchive.GetEntry('assets/p115rsacipher/LICENSE')) { throw 'APK is missing the MIT 115 cipher license.' }
     $accountLicenses = Get-Content (Join-Path $workspace 'app/godot/i18n/licenses.json') -Raw | ConvertFrom-Json
     if (-not $apkArchive.GetEntry('assets/licenses.json')) { throw 'APK is missing the global About license index.' }
@@ -353,6 +357,12 @@ foreach ($symbol in @('Java_org_vrpassthroughplayer_plugin_RvmNative_runBenchmar
 & "$env:ANDROID_HOME\cmdline-tools\latest\bin\apkanalyzer.bat" dex packages --defined-only $apkPath 2>&1 | Out-File (Join-Path $logDirectory 'apk-dex-packages.log') -Encoding utf8
 if ($LASTEXITCODE -ne 0) { throw 'APK DEX inspection failed.' }
 $dexReport = Get-Content (Join-Path $logDirectory 'apk-dex-packages.log') -Raw
+if ($dexReport -match 'org\.codelibs\.jcifs\.smb1?\.(http|https)(\.|\s|$)') {
+    throw 'APK contains unused jcifs HTTP NTLM/TLS adapters; check the filtered SMB dependency.'
+}
+foreach ($smbClass in @('org.codelibs.jcifs.smb.impl.SmbFile','org.codelibs.jcifs.smb.impl.SmbRandomAccessFile','org.codelibs.jcifs.smb.impl.NtlmPasswordAuthenticator')) {
+    if ($dexReport -notmatch ('(?m)\s' + [regex]::Escape($smbClass) + '\r?$')) { throw "APK is missing required SMB class: $smbClass" }
+}
 foreach ($expectedClass in @('androidx.media3.exoplayer.ExoPlayer','org.vrpassthroughplayer.plugin.LocalVideoBridge','org.vrpassthroughplayer.plugin.LocalVideoPicker','org.vrpassthroughplayer.plugin.MediaSessionGate','org.vrpassthroughplayer.plugin.RvmNative','org.vrpassthroughplayer.plugin.RvmBenchmarkRunner','org.vrpassthroughplayer.plugin.RvmRuntime','org.vrpassthroughplayer.plugin.RvmProfiles','org.vrpassthroughplayer.plugin.FramePairGate','org.vrpassthroughplayer.plugin.RvmVideoProbe')) {
     if ($dexReport -notmatch ('(?m)\s' + [regex]::Escape($expectedClass) + '\r?$')) { throw "APK is missing required media class: $expectedClass" }
 }

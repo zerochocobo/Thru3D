@@ -74,11 +74,15 @@ int gpu_mode(bool photo = false) {
     return mode;
 }
 
-// OpenCL priority of the depth queue: 0 low (default), 1 normal, 2 high.
-// Debug builds can compare: adb shell setprop debug.vrpp.depth.priority low|normal|high.
-int depth_priority() {
+// OpenCL priority of the depth queue: 0 low (default), 1 normal, 2 high. Low for photos too: at
+// normal a 518x518 photo inference (0.38 s) held the XR frames back (42 stalls of 25-51 frames in
+// 187 s, 64.6 fps); at low it took 0.50 s with 1 stall in 394 s (71.9 fps, Quest 3 photo browsing).
+// Debug builds can compare: adb shell setprop debug.vrpp.depth.priority (video) or
+// debug.vrpp.depth.photo_priority (photo) low|normal|high.
+int depth_priority(bool photo = false) {
     char value[PROP_VALUE_MAX] = {};
-    if (__system_property_get("debug.vrpp.depth.priority", value) > 0) {
+    if (__system_property_get(photo ? "debug.vrpp.depth.photo_priority" : "debug.vrpp.depth.priority", value) > 0) {
+        if (std::strcmp(value, "low") == 0) return 0;
         if (std::strcmp(value, "normal") == 0) return 1;
         if (std::strcmp(value, "high") == 0) return 2;
     }
@@ -135,7 +139,7 @@ struct Depth final {
         config.backendConfig = &backend;
         // LOW GPU priority: depth runs ~70 ms at a time and must not hold back the video's GL copies.
         // At NORMAL, 1080p30 lost ~3% of frames (29.2 fps); at LOW it shows all 30 (Quest 3, measured).
-        vrpp_set_cl_priority(depth_priority());
+        vrpp_set_cl_priority(depth_priority(photo));
         session = net->createSession(config);
         vrpp_set_cl_priority(-1);
         require(session != nullptr, "MNN depth OpenCL session creation failed");
@@ -256,7 +260,7 @@ Java_org_vrpassthroughplayer_plugin_DepthNative_describe(JNIEnv* env, jclass, jl
     try {
         const auto depth = find(handle);
         std::ostringstream json;
-        json << "{\"width\":" << depth->width << ",\"height\":" << depth->height << ",\"gpu_mode\":" << depth->mode << ",\"priority\":" << depth_priority() << ",\"prepare_ms\":" << depth->prepare_ms
+        json << "{\"width\":" << depth->width << ",\"height\":" << depth->height << ",\"gpu_mode\":" << depth->mode << ",\"priority\":" << depth_priority(depth->photo) << ",\"prepare_ms\":" << depth->prepare_ms
              << ",\"gpu_ops\":" << depth->gpu_ops << ",\"cpu_fallback_ops\":" << depth->host_ops.size() << '}';
         return env->NewStringUTF(json.str().c_str());
     } catch (const std::exception& error) { fail(env, error.what()); return nullptr; }

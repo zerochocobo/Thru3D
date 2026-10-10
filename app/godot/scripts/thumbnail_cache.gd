@@ -22,6 +22,13 @@ static func protect_keys(keys: Array) -> void:
 static func path_for(key: String) -> String:
 	return DIRECTORY.path_join(key.sha1_text() + ".jpg")
 
+static func relocate(old_uri: String, new_uri: String) -> void:
+	var old_path := path_for(old_uri)
+	var new_path := path_for(new_uri)
+	_textures.erase(old_path); _textures.erase(new_path)
+	if FileAccess.file_exists(new_path): DirAccess.remove_absolute(new_path)
+	if FileAccess.file_exists(old_path): DirAccess.rename_absolute(old_path, new_path)
+
 static func has(key: String) -> bool:
 	return not key.is_empty() and FileAccess.file_exists(path_for(key))
 

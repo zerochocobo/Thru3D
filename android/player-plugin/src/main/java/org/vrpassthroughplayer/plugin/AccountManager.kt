@@ -29,6 +29,7 @@ internal class AccountManager(private val host: () -> Activity?) {
         var busy = false
         var revision = 0
         var old: MediaServerAccount? = null
+        var savedWebDavLogin: JSONObject? = null
         var sms: Cloud115Auth.Result.Sms? = null
         var smsSent = false
         var nextSmsAt = 0L
@@ -47,7 +48,7 @@ internal class AccountManager(private val host: () -> Activity?) {
 
     @Synchronized fun open(kind: String, provider: String, accountId: String, raw: String): Int {
         if (closed || kind !in setOf("cloud", "server", "dav", "discover") || raw.length > 4096) return -1
-        if (kind == "cloud" && provider !in CloudDrive.PROVIDERS) return -1
+        if (kind == "cloud" && provider !in CloudDrive.PROVIDERS && !(BuildConfig.DEBUG && provider in CloudDrive.TRIAL_PROVIDERS) && !(provider == CloudDrive.P115 && accountId.isNotEmpty())) return -1
         if (kind == "server" && provider !in setOf("emby", "jellyfin", "stash", "xbvr")) return -1
         cancel(session?.id ?: 0)
         val s = Session(ids.incrementAndGet(), kind, provider, accountId)
@@ -66,8 +67,14 @@ internal class AccountManager(private val host: () -> Activity?) {
                 val all = CloudLibrary.accounts()
                 val old = (0 until all.length()).map(all::getJSONObject).find { it.getString("id") == accountId }
                 require(accountId.isEmpty() || old?.optString("provider") == provider)
-                s.set("name", old?.getString("name") ?: CloudDrive.PROVIDERS.getValue(provider))
+                s.set("name", old?.getString("name") ?: CloudDrive.providerName(provider))
                 s.auth = if (provider == CloudDrive.P115) Cloud115Auth() else null
+                if (provider == CloudDrive.WEBDAV) {
+                    val metadata = if (accountId.isEmpty()) JSONObject() else CloudLibrary.webDavMetadata(accountId)
+                    s.set("base", metadata.optString("base", data.optString("base", "http://")))
+                    s.set("username", metadata.optString("username", data.optString("username")))
+                    s.savedWebDavLogin = metadata
+                }
             }
             if (kind == "dav") task(s) { dav(s, app) }
             if (kind == "discover") task(s) { discover(s, app) }
@@ -91,7 +98,7 @@ internal class AccountManager(private val host: () -> Activity?) {
                 .put("sms_length", s.inputs.getValue("sms").length).put("sms_sent", s.smsSent)
                 .put("challenge_revision", s.challengeVersion)
                 .put("sms_wait", ((s.nextSmsAt - SystemClock.elapsedRealtime() + 999) / 1000).coerceAtLeast(0))
-                .put("has_password", s.old?.key?.isNotEmpty() == true).put("result", s.result)
+                .put("has_password", (s.old?.key?.isNotEmpty() == true || RemoteWebDav.retainsSavedLogin(s.savedWebDavLogin, s.value("base"), s.value("username")))).put("result", s.result)
                 .put("editing_account", s.accountId.isNotEmpty())
             s.challenge?.let { c ->
                 value.put("prompt", android.util.Base64.encodeToString(c.prompt, android.util.Base64.NO_WRAP))
@@ -144,11 +151,18 @@ internal class AccountManager(private val host: () -> Activity?) {
         val data = runCatching { if (raw.isEmpty()) JSONObject() else JSONObject(raw) }.getOrNull() ?: return
         if (action == "web") {
             synchronized(s) {
-                if (s.busy || s.kind != "cloud") return
+                if (s.busy || s.kind != "cloud" || (s.provider != CloudDrive.P115 && !OpenListAuth.supported(s.provider))) return
                 s.error = ""; s.state = "web"; s.revision++
-                if (s.web == null) s.web = InAppWebLogin(host, s.provider) { cookie ->
+                if (s.web == null) s.web = InAppWebLogin(host, s.provider, { cookie ->
                     task(s) { connect(s, cookie) }
-                }
+                }, { credential ->
+                    task(s) {
+                        CloudLibrary.connectOAuth(credential, s.value("name").ifBlank { CloudDrive.providerName(s.provider) }, s.accountId.ifEmpty { null },
+                            { block -> commit(s, block) })
+                        commit(s) { s.state = "done"; s.inputs.values.forEach { it.clear() } }
+                        s.web?.close()
+                    }
+                })
                 s.web!!.open()
             }
             return
@@ -157,6 +171,12 @@ internal class AccountManager(private val host: () -> Activity?) {
             val app = context()
             when (action) {
                 "save_server" -> { require(s.kind == "server"); saveServer(s, app) }
+                "save_webdav" -> {
+                    require(s.kind == "cloud" && s.provider == CloudDrive.WEBDAV)
+                    CloudLibrary.connectWebDav(s.value("name").ifBlank { "WebDAV" }, s.value("base"), s.value("username"),
+                        s.value("password"), s.accountId.ifEmpty { null }, { block -> commit(s, block) })
+                    commit(s) { s.state = "done"; s.inputs.values.forEach { it.clear() } }
+                }
                 "rename" -> { require(s.kind == "cloud" && s.accountId.isNotEmpty()); commit(s) { CloudLibrary.rename(s.accountId, s.value("name")); s.state = "done" } }
                 "password", "send_sms", "verify_sms", "captcha", "answer" -> {
                     require(s.kind == "cloud" && s.provider == CloudDrive.P115)
@@ -179,6 +199,7 @@ internal class AccountManager(private val host: () -> Activity?) {
             if (s.cancelled || closed) return@execute
             try { work() } catch (e: Exception) {
                 synchronized(s) { if (!s.cancelled) {
+                    if (e is MediaServerFailure && e.httpStatus > 0) s.result.put("http_status", e.httpStatus)
                     s.error = when (e) {
                         is MediaServerFailure -> e.code
                         is CloudFailure -> if (e.reason == "cloud_login_required") "Sign in again." else "Cloud connection failed"
@@ -199,7 +220,7 @@ internal class AccountManager(private val host: () -> Activity?) {
     }
 
     private fun connect(s: Session, cookie: String) {
-        CloudLibrary.connect(s.provider, s.value("name").ifBlank { CloudDrive.PROVIDERS.getValue(s.provider) }, cookie,
+        CloudLibrary.connect(s.provider, s.value("name").ifBlank { if (s.provider == CloudDrive.P115) "115" else CloudDrive.PROVIDERS.getValue(s.provider) }, cookie,
             s.accountId.ifEmpty { null }, { block -> commit(s, block) })
         commit(s) { s.state = "done"; s.inputs.values.forEach { it.clear() }; s.challenge = null }
         s.web?.close()

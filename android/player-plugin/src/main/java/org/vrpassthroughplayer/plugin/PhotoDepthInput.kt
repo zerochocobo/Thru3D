@@ -12,7 +12,6 @@ import android.media.ExifInterface
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.roundToInt
 
 /** One orientation-preserving photo input; the full-resolution color is decoded separately. */
 internal object PhotoDepthInput {
@@ -24,12 +23,12 @@ internal object PhotoDepthInput {
     // Video warmup removes obsolete files in its own directory. Keep photo programs separate.
     fun cacheDirectory(context: Context) = File(context.cacheDir, "photo-depth-mnn").apply { mkdirs() }
 
+    // Stretch the whole photo over the model input. Letterbox bars join the ViT's global attention
+    // and skew the content's depth (worst 0.29 vs 0.07 on 40 portraits, 0.087 vs 0.042 on Quest);
+    // the depth map is stretched back over the photo through the full content rect.
     fun fit(width: Int, height: Int): Content {
         require(width > 0 && height > 0)
-        val scale = minOf(WIDTH.toDouble() / width, HEIGHT.toDouble() / height)
-        val w = (width * scale).roundToInt().coerceIn(1, WIDTH)
-        val h = (height * scale).roundToInt().coerceIn(1, HEIGHT)
-        return Content((WIDTH - w) / 2, (HEIGHT - h) / 2, w, h)
+        return Content(0, 0, WIDTH, HEIGHT)
     }
 
     fun prepare(source: File): Input {

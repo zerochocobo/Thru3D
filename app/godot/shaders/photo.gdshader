@@ -8,6 +8,8 @@ uniform vec2 generated_size = vec2(1.0);
 #include "res://shaders/video_coordinates.gdshaderinc"
 #include "res://shaders/sharpness.gdshaderinc"
 uniform vec2 crop_center = vec2(0.5);
+uniform vec2 crop_aspect = vec2(1.0);
+uniform vec2 crop_skew = vec2(0.0);
 uniform float content_zoom = 1.0;
 uniform vec4 pano_rect = vec4(0.0, 0.0, 1.0, 1.0);
 uniform bool detail_projection = false;
@@ -39,7 +41,11 @@ void fragment() {
 		direction = normalize(detail_forward + detail_right * p.x + detail_up * p.y);
 	}
 	vec2 shown = eye_uv(UV, direction);
-	if (video_geometry == 0) { shown = crop_center + (shown - vec2(0.5)) / content_zoom; }
+	if (video_geometry == 0) {
+		vec2 offset = shown - vec2(0.5);
+		shown = crop_center + vec2(offset.x * crop_aspect.x + offset.y * crop_skew.x,
+			offset.x * crop_skew.y + offset.y * crop_aspect.y) / content_zoom;
+	}
 	if (photo_depth && !photo_stereo && !stereo_sbs && video_geometry == 0) {
 		vec2 fixed_uv = shown;
 		for (int i = 0; i < 4; i++) {

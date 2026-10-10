@@ -41,7 +41,9 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                         report.put("smb", SmbCryptoProbe.run())
                         1
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_CLOUD") {
-                        CloudPlaybackProbe.request(context.applicationContext, request, intent.getBooleanExtra("play", false))
+                        val provider = intent.getStringExtra("provider") ?: CloudDrive.P115
+                        if (provider == CloudDrive.P115) CloudPlaybackProbe.request(context.applicationContext, request, intent.getBooleanExtra("play", false))
+                        else OpenListCloudProbe.request(context.applicationContext, request, provider, intent.getBooleanExtra("play", false))
                     } else if (intent.action == "com.wapok.thru3d.DEBUG_DLNA") {
                         // Same discovery as the library menu; results go to logcat tag QuestDlna.
                         val app = context.applicationContext
@@ -82,7 +84,7 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                         when (intent.action) {
                         "com.wapok.thru3d.DEBUG_PLAYER_MPV" -> {
                             val operation = intent.getStringExtra("operation") ?: "open"
-                            require(operation in setOf("open", "alpha", "depth", "playing", "seek", "hold_pixels", "observe", "stereo", "profile", "close", "pixels", "subtitle", "display_quality", "sharpness", "cloud_accounts", "cloud_page_probe", "display_menu", "player_menu", "restart_app", "quit_app", "seek_policy_ui"))
+                            require(operation in setOf("open", "alpha", "depth", "playing", "seek", "hold_pixels", "observe", "stereo", "profile", "close", "pixels", "subtitle", "display_quality", "sharpness", "cloud_accounts", "cloud_page_probe", "display_menu", "player_menu", "restart_app", "quit_app", "seek_policy_ui", "media_library_ui"))
                             val command = JSONObject().put("operation", operation).put("request_key", request)
                                 .put("value", intent.getFloatExtra("value", 0f).toDouble())
                                 .put("benchmark", intent.getBooleanExtra("benchmark", false))
@@ -104,6 +106,13 @@ class DebugDiagnosticsReceiver : BroadcastReceiver() {
                                 val mode = intent.getStringExtra("seek_mode")
                                 require(mode in setOf("speed", "exact"))
                                 command.put("seek_mode", mode)
+                            }
+                            if (operation == "media_library_ui") {
+                                val step = intent.getStringExtra("step") ?: "snapshot"
+                                require(step in setOf("servers", "add", "delete", "home", "all", "genres", "tags", "folders", "scroll_end", "back", "retry", "snapshot", "reauth"))
+                                val provider = intent.getStringExtra("provider") ?: "emby"
+                                require(provider in setOf("emby", "jellyfin", "stash", "xbvr"))
+                                command.put("step", step).put("provider", provider)
                             }
                             if (operation == "seek_policy_ui") {
                                 val step = intent.getStringExtra("step")

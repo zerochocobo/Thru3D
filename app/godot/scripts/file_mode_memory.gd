@@ -38,6 +38,9 @@ static func valid_mode(value: Variant) -> bool:
 	for name in ["stereo_sbs", "swap_eyes", "alpha_requested"]:
 		if not value.get(name) is bool:
 			return false
+	for name in ["top_bottom", "stereo_half"]:
+		if value.has(name) and not value[name] is bool:
+			return false
 	return true
 
 func _bank_path(bank: int) -> String:
@@ -123,6 +126,16 @@ func remember(uri: String, mode: Dictionary) -> bool:
 
 func _commit(staged: String, target: String) -> Error:
 	return DirAccess.rename_absolute(staged, target)
+
+func relocate(old_uri: String, new_uri: String, title: String = "") -> bool:
+	var old_key := key_for(old_uri)
+	var new_key := key_for(new_uri)
+	if old_key.is_empty() or new_key.is_empty() or not entries.has(old_key): return false
+	var value: Dictionary = entries[old_key].duplicate(true)
+	if value.has("uri"): value.uri = new_uri
+	if value.has("title") and not title.is_empty(): value.title = title.left(256)
+	entries[new_key] = value; entries.erase(old_key); dirty = true
+	return true
 
 func save() -> bool:
 	if not dirty:
